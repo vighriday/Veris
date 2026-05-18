@@ -1,0 +1,69 @@
+{
+  "$schema": "https://skills.sh/schema/v1.json",
+  "name": "veris",
+  "displayName": "Veris — Behavioral Verification Infrastructure",
+  "version": "2.1.0",
+  "description": "MCP-native verification intelligence for autonomous coding agents. Builds a behavioral graph of any TypeScript/JavaScript repo, clusters nodes into semantic workflows (Authentication, Billing, Checkout, Caching, Queue, etc.), runs real git-worktree diffs, scores blast radius and dependency fragility with explanations, detects behavioral drift across runs, generates concrete adversarial probes (concurrency, retry storms, replay, idempotency, cache stampede), and produces an interactive single-file dashboard plus 17 MCP tools. Local-first. Zero cloud. MIT.",
+  "license": "MIT",
+  "homepage": "https://github.com/vighriday/Veris",
+  "repository": "https://github.com/vighriday/Veris",
+  "keywords": [
+    "mcp",
+    "verification",
+    "behavioral-graph",
+    "code-analysis",
+    "claude-code",
+    "cursor",
+    "ai-agents",
+    "ts-morph",
+    "typescript",
+    "drift-detection",
+    "adversarial-testing"
+  ],
+  "categories": ["code-analysis", "verification", "developer-tools"],
+  "runtime": "node",
+  "engines": { "node": ">=18.0.0" },
+  "install": {
+    "npm": "npm install -g veris-core",
+    "npx": "npx veris-core analyze"
+  },
+  "mcp": {
+    "command": "node",
+    "args": ["${PROJECT_ROOT}/node_modules/veris-core/dist/mcp-index.js"],
+    "stdio": true,
+    "envVars": {
+      "VERIS_STATE_DISABLED": "Set to 1 for zero-retention mode",
+      "VERIS_PLUGINS_DISABLED": "Set to 1 to skip plugin loading",
+      "VERIS_CONFIDENCE_THRESHOLD": "Exit code 2 below this number"
+    },
+    "tools": [
+      "analyze_repository",
+      "export_behavioral_graph",
+      "analyze_pr_behavior",
+      "generate_verification_plan",
+      "identify_unverified_behaviors",
+      "list_workflows",
+      "analyze_workflow",
+      "detect_drift",
+      "generate_adversarial_probes",
+      "allocate_budget",
+      "what_if_revert",
+      "report_execution",
+      "confidence_history",
+      "node_history",
+      "export_onboarding",
+      "cross_repo_snapshot",
+      "register_repo"
+    ]
+  },
+  "permissions": {
+    "filesystem": "read+write within project root and ~/.veris",
+    "network": "none",
+    "shell": "git only (rev-parse, worktree)"
+  },
+  "privacy": {
+    "zeroRetention": "VERIS_STATE_DISABLED=1 disables all SQLite writes",
+    "telemetry": "none",
+    "phoneHome": false
+  }
+}

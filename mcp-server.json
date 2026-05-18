@@ -1,0 +1,36 @@
+{
+  "$schema": "https://modelcontextprotocol.io/schemas/server/v1.json",
+  "name": "veris",
+  "displayName": "Veris",
+  "version": "2.1.0",
+  "description": "Behavioral Verification Infrastructure — MCP-native verification intelligence layer. 17 tools for workflow grouping, drift detection, counterfactual reasoning, adversarial probe generation, and confidence modeling.",
+  "license": "MIT",
+  "homepage": "https://github.com/vighriday/Veris",
+  "author": { "name": "vighriday", "url": "https://github.com/vighriday" },
+  "stdioCommand": {
+    "command": "npx",
+    "args": ["-y", "veris-core", "mcp"]
+  },
+  "tools": [
+    { "name": "analyze_repository",         "category": "ingest" },
+    { "name": "export_behavioral_graph",    "category": "ingest" },
+    { "name": "analyze_pr_behavior",        "category": "diff" },
+    { "name": "generate_verification_plan", "category": "plan" },
+    { "name": "identify_unverified_behaviors", "category": "confidence" },
+    { "name": "list_workflows",             "category": "semantic" },
+    { "name": "analyze_workflow",           "category": "semantic" },
+    { "name": "detect_drift",               "category": "drift" },
+    { "name": "generate_adversarial_probes","category": "verification" },
+    { "name": "allocate_budget",            "category": "verification" },
+    { "name": "what_if_revert",             "category": "counterfactual" },
+    { "name": "report_execution",           "category": "feedback" },
+    { "name": "confidence_history",         "category": "history" },
+    { "name": "node_history",               "category": "history" },
+    { "name": "export_onboarding",          "category": "knowledge" },
+    { "name": "cross_repo_snapshot",        "category": "fleet" },
+    { "name": "register_repo",              "category": "fleet" }
+  ],
+  "tags": ["verification", "code-analysis", "behavioral-graph", "ai-agents", "claude-code", "cursor"],
+  "platforms": ["linux", "darwin", "win32"],
+  "engines": { "node": ">=18.0.0" }
+}

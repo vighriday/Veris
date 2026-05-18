@@ -1,39 +1,52 @@
-name: Veris - Behavioral Verification Infrastructure
+name: Veris CI
 
 on:
+  push:
+    branches: [main, master]
   pull_request:
-    branches:
-      - main
-      - master
+    branches: [main, master]
 
 jobs:
-  veris-analysis:
+  build-and-smoke:
+    name: build + smoke (Node ${{ matrix.node }})
+    strategy:
+      matrix:
+        node: ['18', '20', '22']
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Need full history for behavioral diffs
+          fetch-depth: 0
 
-      - name: Setup Node.js
+      - name: Setup Node.js ${{ matrix.node }}
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ matrix.node }}
           cache: 'npm'
 
-      - name: Install Dependencies
+      - name: Install
         run: npm ci
 
-      - name: Build Project
+      - name: Build
         run: npm run build
 
-      - name: Run Veris CLI (with git diff vs base)
-        run: node dist/cli.js ./ --base-ref=origin/${{ github.base_ref }}
+      - name: Doctor
+        run: node dist/cli.js doctor
+
+      - name: Smoke-test CLI
+        run: node dist/cli.js . --base-ref=origin/${{ github.base_ref || github.ref_name }} --quiet
         env:
-          VERIS_CONFIDENCE_THRESHOLD: ${{ vars.VERIS_CONFIDENCE_THRESHOLD || '0' }}
+          VERIS_CONFIDENCE_THRESHOLD: '0'
+
+      - name: Smoke-test MCP chain
+        run: npx ts-node tests/test-mcp-deep.ts
+        timeout-minutes: 2
 
       - name: Upload Veris Reports
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: veris-reports
+          name: veris-reports-node${{ matrix.node }}
           path: veris-reports/
+          if-no-files-found: ignore

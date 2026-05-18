@@ -166,10 +166,13 @@ export class ReportingEngine {
 }
 
 function renderDashboard(payload: DashboardPayload): string {
-    const json = JSON.stringify(payload, (_k, v) => {
-        // Trim verbose fields to keep file size reasonable
-        return v;
-    });
+    // Serialize payload safely for embedding inside <script>. JSON.stringify is
+    // safe for HTML except for `</script>` and U+2028/U+2029 line terminators
+    // which break a JS literal. Escape those.
+    const json = JSON.stringify(payload)
+        .replace(/<\/script/gi, '<\\/script')
+        .replace(/\u2028/g, '\\u2028')
+        .replace(/\u2029/g, '\\u2029');
 
     // Pre-compute summary stats
     const totalNodes = payload.graph.nodes.length;
@@ -277,18 +280,50 @@ function renderDashboard(payload: DashboardPayload): string {
   .badge-tier.t1 { background: rgba(79,140,255,0.2); color: var(--accent); }
   .badge-tier.t2 { background: rgba(255,179,71,0.2); color: var(--warn); }
   .badge-tier.t3 { background: rgba(255,93,108,0.2); color: var(--danger); }
+  .filter-banner { position: sticky; top: 0; z-index: 50; background: rgba(79,140,255,0.12); border: 1px solid var(--accent); padding: 8px 14px; border-radius: 6px; margin: 0 20px 12px; font-size: 13px; display: none; justify-content: space-between; align-items: center; }
+  .filter-banner.active { display: flex; }
+  .filter-banner button { background: transparent; border: 1px solid var(--accent); color: var(--accent); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 11px; }
+  .filter-banner button:hover { background: var(--accent); color: #fff; }
+  .top-actions { display:flex; gap: 8px; flex-wrap:wrap; }
+  .top-actions a, .top-actions button { background: var(--panel2); border:1px solid var(--border); color: var(--text); padding: 6px 12px; border-radius: 6px; font-size: 12px; text-decoration:none; cursor:pointer; }
+  .top-actions a:hover, .top-actions button:hover { border-color: var(--accent); color: var(--accent); }
+  .hero-summary { background:var(--panel2); border:1px solid var(--border); border-radius:8px; padding: 14px 18px; margin-bottom: 16px; }
+  .hero-summary .h-title { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+  .hero-summary .h-body { font-size: 15px; line-height: 1.5; }
+  .tier-legend { display:flex; gap: 12px; flex-wrap:wrap; font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .tier-legend .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right: 4px; vertical-align: middle; }
+  .info-tip { display:inline-block; width: 14px; height: 14px; line-height: 14px; text-align: center; border-radius: 50%; background: var(--border); color: var(--muted); font-size: 10px; cursor: help; margin-left: 4px; font-weight: 700; }
+  .info-tip:hover { background: var(--accent); color: #fff; }
+  .kb-hint { position: fixed; bottom: 12px; left: 12px; background: rgba(15,17,21,0.85); border:1px solid var(--border); padding: 6px 10px; border-radius: 6px; font-size: 11px; color: var(--muted); pointer-events:none; }
   @media (max-width: 1000px) { .layout { grid-template-columns: 1fr 1fr; } .half { grid-column: span 1; } }
-  @media (max-width: 700px)  { .layout { grid-template-columns: 1fr; } }
+  @media (max-width: 700px)  { .layout { grid-template-columns: 1fr; } .kb-hint { display:none; } }
 </style>
 </head>
 <body>
 <header>
   <div>
-    <h1>Veris Dashboard</h1>
+    <h1>Veris <span style="font-size:11px;color:var(--muted);font-weight:400;margin-left:6px;vertical-align: middle;">Behavioral Verification Infrastructure</span></h1>
     <div class="meta" id="metaLine"></div>
   </div>
-  <div class="meta" id="genTime"></div>
+  <div class="top-actions">
+    <button id="exportJsonBtn" title="Download dashboard data as JSON">Export JSON</button>
+    <button id="exportCsvBtn" title="Download targets + probes as CSV">Export CSV</button>
+    <a href="https://github.com/vighriday/Veris#readme" target="_blank" rel="noopener">Docs</a>
+    <span class="meta" id="genTime"></span>
+  </div>
 </header>
+
+<div class="filter-banner" id="filterBanner">
+  <span>Filtered to: <strong id="filterBannerName"></strong></span>
+  <button id="clearFilterBtn">Clear filter (Esc)</button>
+</div>
+
+<div style="padding: 0 20px 0 20px;">
+  <div class="hero-summary" id="heroSummary">
+    <div class="h-title">Executive Summary</div>
+    <div class="h-body" id="heroBody">Loading...</div>
+  </div>
+</div>
 
 <div class="layout">
   <!-- Confidence Gauge -->
@@ -322,11 +357,16 @@ function renderDashboard(payload: DashboardPayload): string {
   <div class="card half">
     <h2>Verification Coverage</h2>
     <div class="stat-row">
-      <div class="stat"><div class="label">Tier 1</div><div class="value" style="color:var(--accent)">${targetsByTier.structural}</div></div>
-      <div class="stat"><div class="label">Tier 2</div><div class="value" style="color:var(--warn)">${targetsByTier.behavioral}</div></div>
-      <div class="stat"><div class="label">Tier 3</div><div class="value" style="color:var(--danger)">${targetsByTier.adversarial}</div></div>
+      <div class="stat" title="Structural: syntax, schemas, types, lint."><div class="label">Tier 1 <span class="info-tip">?</span></div><div class="value" style="color:var(--accent)">${targetsByTier.structural}</div></div>
+      <div class="stat" title="Behavioral: workflow correctness, contracts, integrations."><div class="label">Tier 2 <span class="info-tip">?</span></div><div class="value" style="color:var(--warn)">${targetsByTier.behavioral}</div></div>
+      <div class="stat" title="Adversarial: concurrency, retries, race conditions, malformed state."><div class="label">Tier 3 <span class="info-tip">?</span></div><div class="value" style="color:var(--danger)">${targetsByTier.adversarial}</div></div>
     </div>
     <div class="explain">Total directives: <strong>${payload.plan.targets.length}</strong></div>
+    <div class="tier-legend">
+      <span><span class="swatch" style="background:var(--accent)"></span>Structural</span>
+      <span><span class="swatch" style="background:var(--warn)"></span>Behavioral</span>
+      <span><span class="swatch" style="background:var(--danger)"></span>Adversarial</span>
+    </div>
   </div>
 
   <!-- Affected Behaviors (Hero) -->
@@ -476,6 +516,7 @@ function renderDashboard(payload: DashboardPayload): string {
 </div>
 
 <div id="toast" class="toast">Copied to clipboard</div>
+<div class="kb-hint">Esc: clear filter • Click workflow card or heatmap cell to filter</div>
 
 <script>
 const PAYLOAD = ${json};
@@ -487,7 +528,58 @@ document.getElementById('metaLine').textContent =
   (m.baseRef ? ' • base: ' + m.baseRef : '') +
   (m.headRef ? ' • head: ' + m.headRef.substring(0,7) : '') +
   (m.projectRoot ? ' • ' + m.projectRoot : '');
-document.getElementById('genTime').textContent = m.generatedAt || '';
+document.getElementById('genTime').textContent = (m.generatedAt || '').replace('T',' ').replace(/\..+/,'') + ' UTC';
+
+// Executive summary narrative
+(function buildHero(){
+  const conf = (PAYLOAD.confidence && PAYLOAD.confidence.overallConfidence) || 0;
+  const drift = PAYLOAD.drift || {};
+  const wf = (PAYLOAD.workflows && PAYLOAD.workflows.aggregates) || [];
+  const highRiskWF = wf.filter(w => w.maxRisk >= 50);
+  const probes = (PAYLOAD.probes || []).filter(p => p.severity === 'high').length;
+  const trend = PAYLOAD.confidenceTrend || [];
+  const trendDelta = trend.length >= 2 ? (trend[0].overallConfidence - trend[trend.length-1].overallConfidence) : 0;
+
+  let parts = [];
+  let verdict = conf >= 70 ? 'Healthy.' : conf >= 40 ? 'Caution.' : 'High risk.';
+  parts.push('<strong style="color:' + (conf>=70?'var(--ok)':conf>=40?'var(--warn)':'var(--danger)') + '">' + verdict + '</strong> Confidence ' + conf.toFixed(0) + '/100' +
+    (trend.length>=2 ? ' (' + (trendDelta>=0?'+':'') + trendDelta.toFixed(0) + ' vs first recorded run)' : '') + '.');
+  if (highRiskWF.length) parts.push(highRiskWF.length + ' workflow' + (highRiskWF.length===1?'':'s') + ' at elevated risk: <em>' + highRiskWF.slice(0,3).map(w=>esc(w.workflowName)).join(', ') + (highRiskWF.length>3?', ...':'') + '</em>.');
+  if (drift.summary) parts.push(esc(drift.summary));
+  if (probes) parts.push(probes + ' high-severity adversarial probe' + (probes===1?'':'s') + ' generated.');
+  parts.push('Read Affected Behaviors below, then jump to Adversarial Probes to copy directives for autonomous execution.');
+  document.getElementById('heroBody').innerHTML = parts.join(' ');
+})();
+
+// Export buttons
+function downloadBlob(filename, blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+document.getElementById('exportJsonBtn').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(PAYLOAD, null, 2)], { type: 'application/json' });
+  downloadBlob('veris-dashboard-payload.json', blob);
+});
+document.getElementById('exportCsvBtn').addEventListener('click', () => {
+  const rows = [['type','workflow','tier','nodeId','field','value']];
+  (PAYLOAD.plan.targets||[]).forEach(t => rows.push(['target', nodeToWorkflow[t.nodeId]||'', t.tier, t.nodeId, 'directive', t.directive]));
+  (PAYLOAD.probes||[]).forEach(p => rows.push(['probe', p.workflowKind||'', p.category||'', p.nodeId, 'scenario', p.scenario]));
+  (PAYLOAD.risks||[]).forEach(r => rows.push(['risk', nodeToWorkflow[r.nodeId]||'', '', r.nodeId, 'overallRisk', String(r.score.overallRisk)]));
+  const csv = rows.map(r => r.map(c => '"' + String(c||'').replace(/"/g,'""') + '"').join(',')).join('\\n');
+  downloadBlob('veris-export.csv', new Blob([csv], { type: 'text/csv' }));
+});
+
+// Filter clear
+document.getElementById('clearFilterBtn').addEventListener('click', () => {
+  activeWorkflowFilter = null; applyWorkflowFilter(); renderWorkflows();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && activeWorkflowFilter) {
+    activeWorkflowFilter = null; applyWorkflowFilter(); renderWorkflows();
+  }
+});
 
 // Build node lookup sets
 const impactedSet = new Set((PAYLOAD.diff.impactedNodes || []).map(n => n.id));
@@ -592,15 +684,21 @@ function renderWorkflows() {
 
 function applyWorkflowFilter() {
   const label = document.getElementById('graphFilterLabel');
+  const banner = document.getElementById('filterBanner');
+  const bname = document.getElementById('filterBannerName');
   if (activeWorkflowFilter) {
     const wf = WORKFLOWS.find(w => w.workflowId === activeWorkflowFilter);
-    label.textContent = '— filtered to: ' + (wf ? wf.workflowName : activeWorkflowFilter);
+    const name = wf ? wf.workflowName : activeWorkflowFilter;
+    label.textContent = '— filtered to: ' + name;
+    bname.textContent = name;
+    banner.classList.add('active');
     // hide non-matching nodes in graph
     networkNodeDataSet.forEach(n => {
       networkNodeDataSet.update({ id: n.id, hidden: n._wf !== activeWorkflowFilter });
     });
   } else {
     label.textContent = '';
+    banner.classList.remove('active');
     networkNodeDataSet.forEach(n => networkNodeDataSet.update({ id: n.id, hidden: false }));
   }
   // Propagate to risk + target tables

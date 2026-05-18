@@ -1,19 +1,63 @@
 {
   "name": "veris-core",
-  "version": "2.0.0",
-  "description": "Veris — Behavioral Verification Infrastructure",
+  "version": "2.1.0",
+  "description": "Veris — Behavioral Verification Infrastructure. MCP-native verification intelligence layer for autonomous coding agents.",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "bin": {
-    "veris": "dist/cli.js"
+    "veris": "dist/cli.js",
+    "veris-mcp": "dist/mcp-index.js"
   },
+  "files": [
+    "dist/",
+    "skill.json",
+    "mcp-server.json",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "build": "tsc",
+    "prepublishOnly": "npm run build",
     "start": "node dist/index.js",
     "start:mcp": "node dist/mcp-index.js",
     "dev": "ts-node src/index.ts",
     "cli": "node dist/cli.js",
     "test:mcp": "node dist/index.js && ts-node tests/test-mcp.ts",
-    "test:mcp:deep": "ts-node tests/test-mcp-deep.ts"
+    "test:mcp:deep": "ts-node tests/test-mcp-deep.ts",
+    "doctor": "node dist/cli.js doctor",
+    "schema": "node dist/cli.js schema"
+  },
+  "keywords": [
+    "mcp",
+    "verification",
+    "behavioral-graph",
+    "code-analysis",
+    "claude-code",
+    "cursor",
+    "ai-agents",
+    "ts-morph",
+    "typescript",
+    "drift-detection",
+    "adversarial-testing",
+    "confidence",
+    "verification-intelligence"
+  ],
+  "homepage": "https://github.com/vighriday/Veris#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vighriday/Veris.git"
+  },
+  "bugs": {
+    "url": "https://github.com/vighriday/Veris/issues"
+  },
+  "license": "MIT",
+  "author": "vighriday",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

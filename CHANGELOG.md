@@ -2,6 +2,52 @@
 
 All notable changes to Veris (Behavioral Verification Infrastructure) will be documented in this file.
 
+## [2.1.0] - 2026-05-18 — "Public-ready"
+
+### Security
+
+- **Shell injection fixed**: `GitDiffDriver` now uses `execFileSync` exclusively (no shell). User-supplied `--base-ref` validated against a strict allowlist regex; refs containing `..`, whitespace, or shell metacharacters are rejected.
+- **XSS hardening**: dashboard JSON payload escapes `</script` and U+2028/U+2029 line terminators when embedded in inline `<script>` tag.
+- **Repository hygiene**: untracked `node_modules` from initial commit (4,432 files removed from tracked tree).
+- **Co-authored-by trailers** stripped from all historical commits via filter-branch.
+
+### Added — CLI subcommands
+
+- `veris doctor` — health check (Node, git, deps, plugins, state).
+- `veris schema` — print public JSON Schemas for MCP tool outputs.
+- `veris version` — print version.
+- `veris mcp` — start MCP server (equivalent to `npx veris-core mcp`).
+- `--watch` — debounced re-run on file changes (fs.watch with polling fallback).
+- `--quiet` / `-q` — reduce log output.
+
+### Added — Dashboard UX
+
+- **Executive Summary band** at the top — prose verdict + workflow risk highlights + drift summary + next action.
+- **Sticky filter banner** with Clear button when a workflow filter is active. **Escape** clears.
+- **Export buttons** — download dashboard payload as JSON or targets+probes+risks as CSV.
+- **Top action bar** — Docs link, project meta visible.
+- **Tier legend + info tooltips** on Tier 1/2/3 stat cards.
+- **Keyboard hint** in bottom-left.
+
+### Added — Marketplace + OSS files
+
+- `skill.json` — Claude Skills (skills.sh) manifest with MCP wiring, env vars, permissions, privacy claims.
+- `mcp-server.json` — MCP registry manifest with categorized tool list.
+- `.npmignore` — publish-clean package.
+- `SECURITY.md` — threat model + reporting flow.
+- `CODE_OF_CONDUCT.md` — Contributor Covenant v2.1.
+- `.github/ISSUE_TEMPLATE/{bug,feature,config}` — structured issue forms.
+- `.github/PULL_REQUEST_TEMPLATE.md` — checklist + test plan.
+- `.gitattributes` — LF line endings.
+- `src/schema/PublicSchema.ts` — JSON Schemas for `RiskScore`, `WorkflowAggregate`, `ConfidenceReport`, `AdversarialProbe`, `DriftReport`.
+
+### Changed
+
+- **CI matrix**: tests on Node 18 / 20 / 22 with doctor + CLI smoke + MCP deep-chain test + artifact upload.
+- Package marked `publishConfig.access=public` with proper `bin`, `files`, `engines`, `repository`, `bugs`, `homepage`, `types`.
+- README rewritten around plug-and-play install paths (MCP one-liner, CLI npx, source).
+- `bin` now also exposes `veris-mcp` for direct MCP-server invocation.
+
 ## [2.0.0] - 2026-05-18 — "Intelligence Layer"
 
 ### Added — engines

@@ -1,0 +1,47 @@
+name: Bug report
+description: Something Veris is doing wrong.
+labels: [bug]
+body:
+  - type: textarea
+    attributes:
+      label: What happened
+      description: A clear description of the bug.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Reproduction steps
+      description: Minimal steps. Include the command run and the repo shape if relevant.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: veris doctor output
+      description: Run `veris doctor` and paste the full output.
+      render: shell
+  - type: input
+    attributes:
+      label: Veris version
+      placeholder: "2.1.0"
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Node version
+      placeholder: "20.x"
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: MCP client
+      options:
+        - "Claude Code (VS Code extension)"
+        - "Claude Code (terminal)"
+        - "Cursor"
+        - "CLI only (no MCP client)"
+        - "Other"

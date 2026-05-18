@@ -25,8 +25,12 @@ interface CliArgs {
     baseRef?: string;
     budget?: number;
     withOnboarding: boolean;
-    command: 'analyze' | 'init' | 'help';
+    watch: boolean;
+    quiet: boolean;
+    command: 'analyze' | 'init' | 'help' | 'doctor' | 'schema' | 'mcp' | 'version';
 }
+
+const VERIS_VERSION = '2.1.0';
 
 function parseArgs(argv: string[]): CliArgs {
     const args = argv.slice(2);
@@ -34,39 +38,90 @@ function parseArgs(argv: string[]): CliArgs {
     let baseRef: string | undefined;
     let budget: number | undefined;
     let withOnboarding = false;
+    let watch = false;
+    let quiet = false;
     let command: CliArgs['command'] = 'analyze';
 
-    if (args[0] === 'init') return { command: 'init', targetDir: args[1] ? path.resolve(args[1]) : process.cwd(), withOnboarding: false };
-    if (args[0] === 'help' || args[0] === '--help' || args[0] === '-h') return { command: 'help', targetDir, withOnboarding: false };
+    if (args[0] === 'init')    return { command: 'init', targetDir: args[1] ? path.resolve(args[1]) : process.cwd(), withOnboarding: false, watch: false, quiet: false };
+    if (args[0] === 'doctor')  return { command: 'doctor', targetDir, withOnboarding: false, watch: false, quiet: false };
+    if (args[0] === 'schema')  return { command: 'schema', targetDir, withOnboarding: false, watch: false, quiet: false };
+    if (args[0] === 'mcp')     return { command: 'mcp', targetDir, withOnboarding: false, watch: false, quiet: false };
+    if (args[0] === 'version' || args[0] === '--version' || args[0] === '-v') return { command: 'version', targetDir, withOnboarding: false, watch: false, quiet: false };
+    if (args[0] === 'help' || args[0] === '--help' || args[0] === '-h') return { command: 'help', targetDir, withOnboarding: false, watch: false, quiet: false };
 
     for (const a of args) {
         if (a.startsWith('--base-ref=')) baseRef = a.split('=')[1];
         else if (a.startsWith('--budget=')) budget = parseInt(a.split('=')[1], 10);
         else if (a === '--onboarding') withOnboarding = true;
+        else if (a === '--watch') watch = true;
+        else if (a === '--quiet' || a === '-q') quiet = true;
         else if (a.startsWith('--')) continue;
         else targetDir = path.resolve(a);
     }
-    return { command, targetDir, baseRef, budget, withOnboarding };
+    return { command, targetDir, baseRef, budget, withOnboarding, watch, quiet };
 }
 
 function printHelp() {
-    console.log(`Veris - Behavioral Verification Infrastructure
+    console.log(`Veris ${VERIS_VERSION} - Behavioral Verification Infrastructure
 
 Usage:
   veris [path]                         Analyze repo at path (default: cwd)
   veris init [path]                    Scaffold .veris/ in a new project
+  veris doctor                         Health check (deps, state, git, plugins)
+  veris schema                         Print public JSON Schemas for tool outputs
+  veris mcp                            Start the MCP server on stdio
+  veris version                        Print version
   veris help                           This message
 
 Analyze flags:
   --base-ref=<ref>                     Git base ref for diff (default: origin/main, HEAD~1)
   --budget=<minutes>                   Allocate verification budget (default: 15)
   --onboarding                         Also write workflow onboarding map
+  --watch                              Re-run on file change (debounced)
+  --quiet                              Reduce log output
 
 Env:
   VERIS_CONFIDENCE_THRESHOLD           Exit code 2 below this confidence
   VERIS_STATE_DISABLED=1               Skip SQLite state (zero-retention mode)
   VERIS_PLUGINS_DISABLED=1             Skip .veris/plugins
+
+Docs: https://github.com/vighriday/Veris
 `);
+}
+
+function runDoctor(targetDir: string) {
+    const out: Array<{ check: string; ok: boolean; detail: string }> = [];
+    out.push({ check: 'Node version', ok: parseInt(process.version.slice(1).split('.')[0], 10) >= 18, detail: process.version });
+    out.push({ check: 'Project root readable', ok: fs.existsSync(targetDir), detail: targetDir });
+    const pkg = path.join(targetDir, 'package.json');
+    out.push({ check: 'package.json present', ok: fs.existsSync(pkg), detail: pkg });
+    const isGit = fs.existsSync(path.join(targetDir, '.git'));
+    out.push({ check: 'Git repository', ok: isGit, detail: isGit ? '.git found' : 'not a git repo (synthetic diff fallback active)' });
+    const verisDir = path.join(targetDir, '.veris');
+    out.push({ check: '.veris directory', ok: fs.existsSync(verisDir), detail: fs.existsSync(verisDir) ? verisDir : 'run `veris init` to scaffold' });
+    const pluginsDir = path.join(verisDir, 'plugins');
+    const pluginCount = fs.existsSync(pluginsDir) ? fs.readdirSync(pluginsDir).filter(f => /\.(js|mjs|cjs)$/.test(f)).length : 0;
+    out.push({ check: 'Plugins', ok: true, detail: pluginCount + ' loaded' });
+    out.push({ check: 'better-sqlite3', ok: !!safeRequire('better-sqlite3'), detail: safeRequire('better-sqlite3') ? 'available' : 'missing (npm install)' });
+    out.push({ check: 'ts-morph', ok: !!safeRequire('ts-morph'), detail: safeRequire('ts-morph') ? 'available' : 'missing (npm install)' });
+
+    console.log(`Veris doctor — ${out.filter(x => x.ok).length}/${out.length} checks passed`);
+    for (const c of out) console.log(`  ${c.ok ? '✓' : '✗'} ${c.check}: ${c.detail}`);
+}
+
+function safeRequire(mod: string): any {
+    try { return require(mod); } catch { return null; }
+}
+
+function runSchema() {
+    const { ALL_SCHEMAS } = require('./schema/PublicSchema');
+    console.log(JSON.stringify(ALL_SCHEMAS, null, 2));
+}
+
+function runMcp() {
+    const { VerisMcpServer } = require('./mcp/McpServer');
+    const server = new VerisMcpServer();
+    server.run().catch((e: Error) => { console.error(e); process.exit(1); });
 }
 
 function runInit(targetDir: string) {
@@ -118,15 +173,37 @@ module.exports.register = function (api) {
 async function runCli() {
     const args = parseArgs(process.argv);
 
-    if (args.command === 'help') { printHelp(); return; }
-    if (args.command === 'init') { runInit(args.targetDir); return; }
+    if (args.command === 'help')    { printHelp(); return; }
+    if (args.command === 'version') { console.log(VERIS_VERSION); return; }
+    if (args.command === 'init')    { runInit(args.targetDir); return; }
+    if (args.command === 'doctor')  { runDoctor(args.targetDir); return; }
+    if (args.command === 'schema')  { runSchema(); return; }
+    if (args.command === 'mcp')     { runMcp(); return; }
 
-    console.log("==================================================");
-    console.log("Veris - Behavioral Verification Infrastructure");
-    console.log("==================================================");
-    console.log(`Target Directory: ${args.targetDir}`);
-    if (args.baseRef) console.log(`Base Ref Hint: ${args.baseRef}`);
-    console.log();
+    if (args.watch) {
+        const { WatchMode } = require('./engine/WatchMode');
+        await analyzeOnce(args);
+        const w = new WatchMode(args.targetDir, async (changed: string[]) => {
+            console.log(`\n-> Change detected (${changed.slice(0, 3).join(', ')}${changed.length > 3 ? ', ...' : ''}). Re-analyzing.`);
+            try { await analyzeOnce(args); } catch (e) { console.error('Re-analyze failed:', e); }
+        });
+        w.start();
+        console.log(`\n-> Watch mode active. Ctrl+C to stop.`);
+        return;
+    }
+
+    return analyzeOnce(args);
+}
+
+async function analyzeOnce(args: CliArgs) {
+    if (!args.quiet) {
+        console.log("==================================================");
+        console.log(`Veris ${VERIS_VERSION} - Behavioral Verification Infrastructure`);
+        console.log("==================================================");
+        console.log(`Target Directory: ${args.targetDir}`);
+        if (args.baseRef) console.log(`Base Ref Hint: ${args.baseRef}`);
+        console.log();
+    }
 
     try {
         // Plugin layer

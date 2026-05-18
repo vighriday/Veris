@@ -1,76 +1,111 @@
-# Veris — Behavioral Verification Infrastructure
+# Veris
 
-Veris is the verification intelligence layer for autonomous software engineering. It does not run your tests. It tells autonomous agents (Claude Code, Cursor, CI pipelines) **what behaviors are at risk, what to verify, and how confident the result actually is** — backed by a behavioral graph, semantic workflow grouping, persistent history, and explainable confidence math.
+**Behavioral Verification Infrastructure for autonomous coding agents.**
 
-Fully open source. MCP-native. Local-first. No cloud required.
+[![CI](https://github.com/vighriday/Veris/actions/workflows/veris.yml/badge.svg)](https://github.com/vighriday/Veris/actions/workflows/veris.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](#install)
+[![MCP](https://img.shields.io/badge/MCP-17_tools-purple)](docs/MCP_TOOLS.md)
+[![Local-first](https://img.shields.io/badge/local--first-yes-success)](#privacy)
 
-## Why Veris
+Veris is the verification intelligence layer that sits between AI coding agents and production reliability. It does **not** run your tests. It tells Claude Code, Cursor, and CI pipelines **what behaviors are at risk, what to verify, and how confident the result actually is** — backed by a behavioral graph, semantic workflow grouping, persistent run history, drift detection, and explainable confidence math.
 
-Most AI coding tools optimize for code generation; verification stays shallow. Veris fills the gap:
+Fully open source. MCP-native. Local-first. No cloud. No telemetry. No paid tier.
 
-- **Behavioral graph** of your repo — classes, methods, functions linked by `DependsOn` + `Invokes`.
-- **Semantic workflow clustering** — auto-groups nodes into domains (Authentication, Billing, Checkout, Caching, Queue, Webhooks, …) so the dashboard speaks the language of behaviors, not files.
-- **Real git-worktree diff** vs base ref — not a synthetic placeholder.
-- **Risk scoring with explanations** — blast radius, fragility, runtime criticality, in plain English.
-- **Confidence math with half-life decay** — verifications get stale. A passing run from 30 days ago is worth less than one from yesterday.
-- **Behavioral drift detection** — same members, different internal topology = silent rewrite. Surface expansion, contraction, oscillation, all named.
-- **Counterfactual mode** — `what_if_revert(nodeIds)` simulates rollback impact.
-- **Adversarial probe generator** — concrete Tier 3 hypotheses (concurrency, idempotency, replay, retry storms, cache stampedes) per high-risk node.
-- **Verification budget allocator** — given N minutes, picks the highest-leverage targets.
-- **Workflow-first onboarding maps** — exports a markdown package new engineers can actually read.
-- **Cross-repo snapshot** — registered services queried in one view.
+---
 
-All of it exposed over MCP. All of it OSS.
+## Plug-and-play install
 
-## Install
+### Option A — As an MCP server (one config line)
 
-```bash
-npm install
-npm run build
-```
-
-## Run against any repo
-
-```bash
-node dist/cli.js .                              # current directory
-node dist/cli.js ../my-service --base-ref=origin/main
-node dist/cli.js . --budget=10 --onboarding
-```
-
-Outputs:
-
-- `veris-reports/veris-report.md` — markdown executive summary
-- `veris-reports/veris-dashboard.html` — interactive single-file dashboard (vis-network graph, heatmap, drift, probes, budget, history)
-- `veris-reports/onboarding/` — workflow maps (with `--onboarding`)
-- `.veris/state.db` — persistent run history
-
-CI gate: `VERIS_CONFIDENCE_THRESHOLD=70` exits with code 2 below threshold.
-Zero-retention: `VERIS_STATE_DISABLED=1` skips all writes.
-
-## Scaffold a new project
-
-```bash
-node dist/cli.js init
-```
-
-Creates `.veris/plugins/`, `config.json`, and a disabled sample plugin.
-
-## MCP
-
-Register Veris as an MCP server for Claude Code / Cursor:
+Add to your MCP client config (Claude Code, Cursor, Continue, etc.):
 
 ```json
 {
   "mcpServers": {
     "veris": {
-      "command": "node",
-      "args": ["C:/absolute/path/to/Veris/dist/mcp-index.js"]
+      "command": "npx",
+      "args": ["-y", "veris-core", "mcp"]
     }
   }
 }
 ```
 
-17 tools available. See [docs/MCP_TOOLS.md](docs/MCP_TOOLS.md) for the full reference and recommended flows.
+Restart the client. 17 tools light up: `analyze_pr_behavior`, `list_workflows`, `detect_drift`, `generate_adversarial_probes`, `allocate_budget`, `what_if_revert`, `report_execution`, and more.
+
+### Option B — As a CLI
+
+```bash
+npx veris-core .                                 # analyze current repo
+npx veris-core . --base-ref=origin/main          # explicit git base ref
+npx veris-core . --budget=10 --onboarding        # 10-min verification plan + onboarding map
+npx veris-core init                              # scaffold .veris/ with plugin slot
+npx veris-core doctor                            # health check
+```
+
+Reports land in `veris-reports/`:
+
+- `veris-dashboard.html` — interactive single-file dashboard (graph, heatmap, drift, probes, budget, history)
+- `veris-report.md` — markdown executive summary
+- `onboarding/` — workflow-first markdown package for new engineers (with `--onboarding`)
+
+### Option C — From source
+
+```bash
+git clone https://github.com/vighriday/Veris
+cd Veris
+npm install && npm run build
+node dist/cli.js .
+```
+
+---
+
+## What it gives you
+
+| Surface | What lands |
+|---|---|
+| **Behavioral graph** | Classes, methods, functions linked by `DependsOn` and real `Invokes` edges (call-expression resolution) |
+| **Semantic workflows** | Auto-clustered into 28 domains (Authentication, Billing, Checkout, Caching, Queue, Webhooks, AI, ...) |
+| **Real git diff** | Worktree-based diff vs any base ref. Not a placeholder |
+| **Risk scoring** | Blast radius, fragility, runtime criticality + plain-English explanations |
+| **Confidence math** | Half-life decay over real execution history. Failed runs reduce confidence; flaky = half credit |
+| **Drift detection** | SHA-256 workflow fingerprints. Silent rewrites caught (same members, different topology) |
+| **Counterfactual mode** | `what_if_revert(nodeIds)` simulates rollback impact |
+| **Adversarial probes** | Concrete Tier 3 hypotheses per workflow kind (idempotency, replay, retry storms, cache stampede) |
+| **Budget allocator** | Knapsack on `(tier × criticality × risk) / cost`. Highest-leverage subset within N minutes |
+| **Knowledge transfer** | Workflow-first onboarding markdown package |
+| **Cross-repo view** | Register multiple services; one MCP call for fleet-wide confidence |
+| **Interactive dashboard** | Single-file HTML. Vis-network graph. Click workflow → filter everything. ESC to clear. Click-to-copy directives |
+
+---
+
+## What you say to Claude Code
+
+```text
+veris: analyze_pr_behavior with baseRef=origin/main
+veris: list_workflows then detect_drift
+veris: generate_adversarial_probes for the highest-risk workflow, then allocate_budget minutes=15
+veris: what_if_revert nodeIds=[...]
+```
+
+After your agent runs tests, close the loop:
+
+```text
+veris: report_execution executions=[{nodeId:..., tier:'Tier 3', result:'pass'}, ...]
+```
+
+Confidence math now reflects what actually ran.
+
+---
+
+## Privacy
+
+- **Local-first.** Everything runs on your machine.
+- **No telemetry.** Veris does not phone home.
+- **Zero-retention mode.** `VERIS_STATE_DISABLED=1` skips all `.veris/state.db` writes.
+- **No network calls.** The MCP server speaks only over stdio.
+
+---
 
 ## Plugins
 
@@ -89,7 +124,17 @@ module.exports.register = function (api) {
 };
 ```
 
-See [docs/PLUGINS.md](docs/PLUGINS.md). Example: [examples/plugin-fintech.js](examples/plugin-fintech.js).
+Full plugin API: [docs/PLUGINS.md](docs/PLUGINS.md). Example: [examples/plugin-fintech.js](examples/plugin-fintech.js).
+
+---
+
+## MCP tool reference
+
+17 tools across 6 categories: ingest, diff, plan, semantic, drift, counterfactual, verification, feedback, history, fleet.
+
+See [docs/MCP_TOOLS.md](docs/MCP_TOOLS.md) for the full reference with recommended flows.
+
+---
 
 ## Architecture
 
@@ -98,7 +143,7 @@ Source -> AST (ts-morph)
        -> Behavioral Graph (DependsOn + Invokes)
        -> Real git-worktree diff vs base ref
        -> Risk model (blast / fragility / criticality + explanations)
-       -> Workflow classifier (semantic domain grouping)
+       -> Workflow classifier (28 semantic kinds, plugin-extensible)
        -> Fingerprints -> Drift detector (vs SQLite history)
        -> Adversarial probe generator
        -> Verification plan (Tier 1/2/3)
@@ -108,12 +153,16 @@ Source -> AST (ts-morph)
        -> MCP (17 tools) -> autonomous agents close the loop via report_execution
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md), [PLAN.md](PLAN.md), and the original PRD ([behavioral_verification_infrastructure_prd.md](behavioral_verification_infrastructure_prd.md)).
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the deep dive. The 33-section foundational PRD lives at [behavioral_verification_infrastructure_prd.md](behavioral_verification_infrastructure_prd.md).
+
+---
+
+## Contributing
+
+PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). Security reports: [SECURITY.md](SECURITY.md).
+
+OSS, sponsor-supported. No paid tier. No gated features.
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
-
-## Contributing
-
-Open source, sponsor-funded. No paid tier. Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
