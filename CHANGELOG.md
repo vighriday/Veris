@@ -2,6 +2,32 @@
 
 All notable changes to Veris (Behavioral Verification Infrastructure) will be documented in this file.
 
+## [2.1.3] - 2026-05-18 — "Data-driven, accuracy fixes"
+
+### Fixed (accuracy bugs in classifier — found by self-audit)
+
+- Workflow classifier used naive substring matching on file paths, so `Users` matched `user` (Profile false positive across all Windows paths), `Planning` matched `plan` (false Billing), `index.ts` matched `index` (false Search), `RepositoryIntelligenceEngine` matched `repository` (false Persistence).
+  - Switched to path-segment matching with a prefix-with-short-suffix rule (`report` matches `reporting`/`reports` but not `replication`).
+  - Switched symbol matching to identifier word boundaries (no more `export` matching every exported symbol).
+  - Dropped over-generic tokens: `user`, `plan`, `index`, `export`, `create`/`update`/`delete`.
+- RiskModelingEngine: replaced binary 80/20 fragility scoring with a log2 curve. Replaced "`label contains 'Engine' or 'auth'`" criticality with a multi-signal score (pattern + path + identifier hints).
+- Self-audit on the dashboard payload confirmed 130/130 graph nodes and 345/345 edges point to real source — no fabricated data.
+
+### Changed — everything externalized
+
+- Workflow rules moved to `data/workflow-rules.json` (25 default rules across 28 kinds).
+- Runtime-risk catalog moved to `data/runtime-risks.json` (18 workflow kinds with curated risk hypotheses).
+- Adversarial probe templates moved to `data/probes.json` (15 workflow kinds with concrete scenarios + invariants, plus generic probes).
+- All risk math constants, confidence weights, tier costs, and workflow criticality multipliers moved to `data/risk-config.json`.
+- `src/data/DataLoader.ts` resolves package defaults and merges per-repo overrides from `<project>/.veris/data/*.json`. Deep-merge for objects; array files take optional `extend: true` flag.
+- Every engine that previously had inline constants (`WorkflowClassifier`, `RiskModelingEngine`, `AdversarialProbeGenerator`, `VerificationBudgetAllocator`, `ConfidenceEngine`, `CounterfactualEngine`) now accepts a `projectRoot` and reads from the data layer.
+
+### Added
+
+- `ROADMAP.md` linked from the README, skill.json, mcp-server.json.
+- `assets/logo.png` and a centered hero block at the top of the README.
+- `data/` directory included in the npm tarball (added to `package.json#files`).
+
 ## [2.1.2] - 2026-05-18
 
 ### Changed

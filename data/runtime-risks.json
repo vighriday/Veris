@@ -1,0 +1,91 @@
+{
+  "$schema": "veris://schema/runtime-risks.v1",
+  "description": "Default runtime-risk hypotheses per workflow kind. Surface what typically breaks in each domain. Override at .veris/data/runtime-risks.json or extend via plugin api.addRuntimeRisks(kind, [...]).",
+  "risks": {
+    "Authentication": [
+      "stale session propagation",
+      "token expiry race",
+      "oauth refresh under retry"
+    ],
+    "Authorization": [
+      "role-cache staleness",
+      "policy drift",
+      "permission bypass on degraded state"
+    ],
+    "Session": [
+      "cookie/session desync",
+      "concurrent session race"
+    ],
+    "Payments": [
+      "double-charge under retry",
+      "partial-capture failure",
+      "idempotency-key collision"
+    ],
+    "Billing": [
+      "proration drift",
+      "subscription state mismatch",
+      "invoice/usage race"
+    ],
+    "Checkout": [
+      "cart-to-order desync",
+      "inventory oversell",
+      "price drift on retry"
+    ],
+    "Cart": [
+      "stale cart on multi-device",
+      "price recompute race"
+    ],
+    "Notifications": [
+      "duplicate delivery on retry",
+      "fan-out amplification",
+      "opt-out staleness"
+    ],
+    "Webhooks": [
+      "retry amplification on non-idempotent handlers",
+      "signature replay",
+      "ordering inversion"
+    ],
+    "Realtime": [
+      "reconnect storm",
+      "message replay",
+      "auth-refresh mid-stream"
+    ],
+    "Queue": [
+      "poison-message loop",
+      "duplicate-job processing",
+      "visibility-timeout drift"
+    ],
+    "Caching": [
+      "stale-after-write",
+      "thundering herd on invalidation",
+      "cache stampede"
+    ],
+    "Persistence": [
+      "transaction boundary leak",
+      "migration ordering hazard",
+      "N+1 on hot path"
+    ],
+    "Sync": [
+      "split-brain on partition",
+      "replication lag drift",
+      "conflict resolution skew"
+    ],
+    "Search": [
+      "index staleness vs source",
+      "reindex storm"
+    ],
+    "Routing": [
+      "middleware ordering shift",
+      "auth bypass via route change"
+    ],
+    "Orchestration": [
+      "edge-case deadlock",
+      "partial-step recovery hazard"
+    ],
+    "AI": [
+      "prompt drift",
+      "tool-call schema break",
+      "context-window overflow"
+    ]
+  }
+}

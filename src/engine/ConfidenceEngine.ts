@@ -1,27 +1,28 @@
 import { RiskReport } from '../models/RiskModels';
 import { VerificationPlan, ConfidenceReport } from '../models/VerificationModels';
 import { VerisState, ExecutionRecord } from '../persistence/VerisState';
+import { loadRiskConfig } from '../data/DataLoader';
 
 /**
- * Confidence calculation with:
- *  - Real execution history (from VerisState) instead of caller-supplied integers.
- *  - Half-life decay: a verification from 30 days ago counts less than one from yesterday.
- *  - Tier weighting: Tier 3 executions buy more confidence than Tier 1.
- *  - Failed executions actively reduce confidence.
- *  - Backwards-compatible with the old signature (state optional).
+ * Confidence engine: math driven entirely by data/risk-config.json -> confidence{}.
+ *
+ * Inputs:
+ *  - riskReports: per-node overallRisk
+ *  - plan: verification targets (Tier 1/2/3)
+ *  - state (optional): persistent execution history with exponential half-life decay
+ *
+ * Outputs:
+ *  - overallConfidence (0..100)
+ *  - executionDepth (0..100) using tier-weighted, time-decayed credit
+ *  - explanation (string[])
+ *  - unverifiedAssumptions (string[])
  */
-const DEFAULT_HALF_LIFE_DAYS = 14;
-
-const TIER_WEIGHT: Record<string, number> = {
-    'Tier 1': 1,
-    'Tier 2': 2,
-    'Tier 3': 4
-};
 
 export interface ConfidenceOptions {
     halfLifeDays?: number;
     state?: VerisState;
     nodeWorkflowMap?: Record<string, string>;
+    projectRoot?: string;
 }
 
 export class ConfidenceEngine {
@@ -32,23 +33,23 @@ export class ConfidenceEngine {
         executedTargetsCount: number = 0,
         opts: ConfidenceOptions = {}
     ): ConfidenceReport {
+        const cfg = loadRiskConfig(opts.projectRoot ?? process.cwd()).confidence;
+        const halfLife = opts.halfLifeDays ?? cfg.halfLifeDays;
+
         const explanation: string[] = [];
         const unverifiedAssumptions: string[] = [];
 
         let confidence = 100;
-        const halfLife = opts.halfLifeDays ?? DEFAULT_HALF_LIFE_DAYS;
 
         const totalRisk = riskReports.reduce((acc, r) => acc + r.score.overallRisk, 0);
         const avgRisk = riskReports.length > 0 ? totalRisk / riskReports.length : 0;
         if (avgRisk > 0) {
-            confidence -= avgRisk * 0.4;
+            confidence -= avgRisk * cfg.riskPenaltyCoefficient;
             explanation.push(`Base confidence degraded to ${confidence.toFixed(1)} due to an average risk score of ${avgRisk.toFixed(1)}.`);
         }
 
-        // Real execution history if state available
         const executionsByNode = new Map<string, ExecutionRecord[]>();
         if (opts.state && opts.state.enabled) {
-            const now = Date.now();
             for (const target of plan.targets) {
                 const recs = opts.state.executionsForNode(target.nodeId);
                 if (recs.length === 0) continue;
@@ -56,19 +57,17 @@ export class ConfidenceEngine {
             }
         }
 
-        // Compute effective execution depth using decayed weights
         let earned = 0;
         let possible = 0;
         let failedPenalty = 0;
         const now = Date.now();
         for (const target of plan.targets) {
             const tierKey = target.tier.split(' - ')[0];
-            const w = TIER_WEIGHT[tierKey] ?? 1;
+            const w = cfg.tierWeight[tierKey] ?? 1;
             possible += w;
             const recs = executionsByNode.get(target.nodeId) || [];
             const matching = recs.filter(r => r.tier.startsWith(tierKey));
             if (matching.length === 0) continue;
-            // Pick the freshest execution for this target+tier
             matching.sort((a, b) => (b.executedAt || '').localeCompare(a.executedAt || ''));
             const latest = matching[0];
             const ageMs = Math.max(0, now - new Date(latest.executedAt || new Date().toISOString()).getTime());
@@ -77,16 +76,14 @@ export class ConfidenceEngine {
             if (latest.result === 'pass') {
                 earned += w * decay;
             } else if (latest.result === 'fail') {
-                failedPenalty += w * 6;
+                failedPenalty += w * cfg.failurePenaltyPerTierWeight;
                 unverifiedAssumptions.push(`Failure on record: ${target.nodeId} (${tierKey}). Most recent run reported result=fail.`);
             } else if (latest.result === 'flaky') {
                 earned += w * decay * 0.5;
-                failedPenalty += w * 2;
+                failedPenalty += w * cfg.flakyHalfCreditPenalty;
             }
-            // 'skipped' contributes nothing
         }
 
-        // If caller passed a manual count and no state-derived earned, fall back to old behavior
         const stateProvided = (opts.state && opts.state.enabled) || earned > 0;
         let executionDepth: number;
         if (stateProvided) {
@@ -97,7 +94,7 @@ export class ConfidenceEngine {
         }
 
         if (executionDepth < 100) {
-            confidence -= (100 - executionDepth) * 0.5;
+            confidence -= (100 - executionDepth) * cfg.missingExecutionPenaltyCoefficient;
             const description = stateProvided
                 ? `Confidence penalized due to missing or stale execution coverage (decayed depth ${executionDepth.toFixed(1)}%).`
                 : `Confidence penalized due to missing execution depth. Only ${executedTargetsCount}/${plan.targets.length} planned verifications completed.`;
@@ -108,14 +105,15 @@ export class ConfidenceEngine {
         }
 
         if (failedPenalty > 0) {
-            confidence -= Math.min(40, failedPenalty);
-            explanation.push(`Recent verification failures reduced confidence by ${Math.min(40, failedPenalty).toFixed(1)}.`);
+            const cappedPenalty = Math.min(cfg.failurePenaltyCap, failedPenalty);
+            confidence -= cappedPenalty;
+            explanation.push(`Recent verification failures reduced confidence by ${cappedPenalty.toFixed(1)}.`);
         }
 
         confidence = Math.max(0, Math.min(confidence, 100));
 
         riskReports.forEach(r => {
-            if (r.score.dependencyFragility > 60) {
+            if (r.score.dependencyFragility > cfg.fragilityAssumptionThreshold) {
                 unverifiedAssumptions.push(`Highly coupled node ${r.nodeId} may have hidden integration drift not covered by standard planning.`);
             }
         });

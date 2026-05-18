@@ -195,7 +195,7 @@ export class VerisMcpServer {
         }
         this.baseGraph = base;
         const diff = new BehavioralDiffEngine().computeDiff(base, head);
-        const risks = new RiskModelingEngine().assessRisk(diff, head);
+        const risks = new RiskModelingEngine(this.projectRoot).assessRisk(diff, head);
         this.lastDiffReport = diff;
         this.lastRiskReports = risks;
         return { diff, risks };
@@ -205,7 +205,7 @@ export class VerisMcpServer {
         const report = this.ensureReport();
         const graph = this.ensureGraph();
         const { diff, risks } = this.ensureDiffAndRisk();
-        const classifier = new WorkflowClassifier();
+        const classifier = new WorkflowClassifier(this.projectRoot);
         const plugins = loadPlugins(this.projectRoot);
         this.pluginsLoaded = plugins.loadedPlugins;
         classifier.ingestPluginRules(plugins.extraWorkflowRules);
@@ -248,7 +248,7 @@ export class VerisMcpServer {
             this.baseGraph = b;
         }
         const diff = new BehavioralDiffEngine().computeDiff(this.baseGraph!, head);
-        const risks = new RiskModelingEngine().assessRisk(diff, head);
+        const risks = new RiskModelingEngine(this.projectRoot).assessRisk(diff, head);
         this.lastDiffReport = diff; this.lastRiskReports = risks;
         this.lastWorkflowReport = null;
         return this.text({
@@ -266,7 +266,7 @@ export class VerisMcpServer {
     private handleIdentifyUnverified(args: any) {
         const { risks } = this.ensureDiffAndRisk();
         const plan = this.ensurePlan();
-        const confidence = new ConfidenceEngine().calculateConfidence(risks, plan, args.executedTargetsCount || 0, { state: this.state });
+        const confidence = new ConfidenceEngine().calculateConfidence(risks, plan, args.executedTargetsCount || 0, { state: this.state, projectRoot: this.projectRoot });
         return this.text(confidence);
     }
     private handleListWorkflows() {
@@ -303,7 +303,7 @@ export class VerisMcpServer {
     private handleGenerateProbes() {
         const wf = this.ensureWorkflows();
         const { risks } = this.ensureDiffAndRisk();
-        const probes = new AdversarialProbeGenerator().generate(risks, wf.workflows, this.ensureGraph().getNodes());
+        const probes = new AdversarialProbeGenerator(this.projectRoot).generate(risks, wf.workflows, this.ensureGraph().getNodes());
         return this.text({ probeCount: probes.length, probes });
     }
     private handleAllocateBudget(args: any) {
@@ -312,7 +312,7 @@ export class VerisMcpServer {
         const plan = this.ensurePlan();
         const wf = this.ensureWorkflows();
         const { risks } = this.ensureDiffAndRisk();
-        const allocation = new VerificationBudgetAllocator().allocate(plan, risks, wf.workflows, minutes);
+        const allocation = new VerificationBudgetAllocator(this.projectRoot).allocate(plan, risks, wf.workflows, minutes);
         return this.text(allocation);
     }
     private handleWhatIfRevert(args: any) {
@@ -327,7 +327,7 @@ export class VerisMcpServer {
             head.getNodes().slice(0, Math.floor(head.getNodes().length * 0.7)).forEach(n => base!.addNode(n));
             head.getEdges().slice(0, Math.floor(head.getEdges().length * 0.7)).forEach(e => base!.addEdge(e));
         }
-        const result = new CounterfactualEngine().whatIfRevert(base, head, args.nodeIds);
+        const result = new CounterfactualEngine(this.projectRoot).whatIfRevert(base, head, args.nodeIds);
         return this.text(result);
     }
     private handleReportExecution(args: any) {

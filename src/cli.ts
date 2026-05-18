@@ -30,7 +30,7 @@ interface CliArgs {
     command: 'analyze' | 'init' | 'help' | 'doctor' | 'schema' | 'mcp' | 'version';
 }
 
-const VERIS_VERSION = '2.1.2';
+const VERIS_VERSION = '2.1.3';
 
 function parseArgs(argv: string[]): CliArgs {
     const args = argv.slice(2);
@@ -245,12 +245,12 @@ async function analyzeOnce(args: CliArgs) {
         console.log("-> Calculating Risk Models...");
         const diffEngine = new BehavioralDiffEngine();
         const diffReport = diffEngine.computeDiff(baseGraph, headGraph);
-        const riskEngine = new RiskModelingEngine();
+        const riskEngine = new RiskModelingEngine(args.targetDir);
         const riskReports = riskEngine.assessRisk(diffReport, headGraph);
 
         // Phase 2.5 — Workflows
         console.log("-> Classifying Behavioral Workflows...");
-        const classifier = new WorkflowClassifier();
+        const classifier = new WorkflowClassifier(args.targetDir);
         classifier.ingestPluginRules(plugins.extraWorkflowRules);
         classifier.ingestExtraRuntimeRisks(plugins.extraRuntimeRisks);
         const workflowReport = classifier.report(headReport, headGraph, diffReport, riskReports);
@@ -262,7 +262,7 @@ async function analyzeOnce(args: CliArgs) {
         const drift = new DriftDetector().detect(runId, fingerprints, state);
 
         // Probes
-        const probeGen = new AdversarialProbeGenerator();
+        const probeGen = new AdversarialProbeGenerator(args.targetDir);
         const probes = probeGen.generate(riskReports, workflowReport.workflows, headGraph.getNodes());
         console.log(`-> Adversarial probes generated: ${probes.length}`);
 
@@ -273,11 +273,11 @@ async function analyzeOnce(args: CliArgs) {
 
         console.log("-> Assessing Confidence (with state-aware decay)...");
         const confidenceEngine = new ConfidenceEngine();
-        const confidence = confidenceEngine.calculateConfidence(riskReports, plan, 0, { state });
+        const confidence = confidenceEngine.calculateConfidence(riskReports, plan, 0, { state, projectRoot: args.targetDir });
 
         // Budget
         const budgetMin = args.budget ?? 15;
-        const budget = new VerificationBudgetAllocator().allocate(plan, riskReports, workflowReport.workflows, budgetMin);
+        const budget = new VerificationBudgetAllocator(args.targetDir).allocate(plan, riskReports, workflowReport.workflows, budgetMin);
 
         // Persist this run
         const ts = new Date().toISOString();

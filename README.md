@@ -1,6 +1,10 @@
-# Veris
+<p align="center">
+  <img src="assets/logo.png" alt="Veris" width="160" />
+</p>
 
-**Behavioral Verification Infrastructure for autonomous coding agents.**
+<h1 align="center">Veris</h1>
+
+<p align="center"><strong>Behavioral Verification Infrastructure for autonomous coding agents.</strong></p>
 
 [![CI](https://github.com/vighriday/Veris/actions/workflows/veris.yml/badge.svg)](https://github.com/vighriday/Veris/actions/workflows/veris.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -158,6 +162,12 @@ Source -> AST (ts-morph)
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the deep dive.
 
 ---
+
+## Roadmap
+
+What is coming next, where help moves the needle: [ROADMAP.md](ROADMAP.md).
+
+Active bugs and fixes land in [CHANGELOG.md](CHANGELOG.md) per patch release.
 
 ## Contributing
 

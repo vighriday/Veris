@@ -1,0 +1,62 @@
+{
+  "$schema": "veris://schema/probes.v1",
+  "description": "Adversarial probe templates per workflow kind. Each probe is a concrete scenario plus the invariant that must hold. Veris emits them as directives; external agents execute. Override at .veris/data/probes.json or extend via plugin.",
+  "probesByKind": {
+    "Authentication": [
+      { "category": "expiry", "scenario": "Refresh token at the exact expiry boundary while two requests are in flight.", "expectedInvariant": "No request observes a half-rotated session.", "severity": "high" },
+      { "category": "replay", "scenario": "Replay a captured login response after logout.", "expectedInvariant": "Replay must be rejected; session must not resurrect.", "severity": "high" },
+      { "category": "auth-edge", "scenario": "OAuth callback arrives twice for the same code parameter.", "expectedInvariant": "Second callback is a no-op or explicit error; no duplicate account linkage.", "severity": "high" }
+    ],
+    "Session": [
+      { "category": "concurrency", "scenario": "Two parallel requests refresh the session cookie simultaneously.", "expectedInvariant": "Cookie value converges; neither request 401s mid-flight.", "severity": "high" }
+    ],
+    "Payments": [
+      { "category": "idempotency", "scenario": "Submit charge twice with the same idempotency key inside a 500ms window.", "expectedInvariant": "Exactly one ledger entry; second call returns the first result.", "severity": "high" },
+      { "category": "retry-storm", "scenario": "Webhook delivery retries 5x within 10 seconds.", "expectedInvariant": "No duplicate fulfillment; downstream events deduped.", "severity": "high" },
+      { "category": "partial-failure", "scenario": "Capture succeeds at gateway, response times out before reaching us.", "expectedInvariant": "Reconciliation eventually marks order paid; no orphan charge.", "severity": "high" }
+    ],
+    "Billing": [
+      { "category": "ordering", "scenario": "Subscription downgrade event arrives before its upgrade event due to reorder.", "expectedInvariant": "Plan state converges to the latest by event_ts, not arrival order.", "severity": "medium" }
+    ],
+    "Checkout": [
+      { "category": "concurrency", "scenario": "Two clients submit the same cart concurrently after inventory dropped to 1.", "expectedInvariant": "Exactly one order created; the other client sees out-of-stock.", "severity": "high" }
+    ],
+    "Webhooks": [
+      { "category": "replay", "scenario": "Replay a 24-hour-old signed payload with the original signature.", "expectedInvariant": "Replay rejected by timestamp window even though signature is valid.", "severity": "high" },
+      { "category": "retry-storm", "scenario": "Sender delivers 50 retries of the same event id within 1 minute.", "expectedInvariant": "Handler is idempotent; no duplicate side effects; backpressure honored.", "severity": "high" }
+    ],
+    "Notifications": [
+      { "category": "idempotency", "scenario": "Duplicate enqueue of the same notification id.", "expectedInvariant": "User receives one message, not two.", "severity": "medium" }
+    ],
+    "Queue": [
+      { "category": "partial-failure", "scenario": "Worker crashes after side effect but before ack.", "expectedInvariant": "Re-delivery is safe (idempotent handler) or quarantined as poison.", "severity": "high" },
+      { "category": "concurrency", "scenario": "Two consumers visibility-timeout race on the same job.", "expectedInvariant": "At-most-once side effect; no double processing.", "severity": "high" }
+    ],
+    "Caching": [
+      { "category": "cache-stampede", "scenario": "Mass cache expiry triggers thundering herd on origin.", "expectedInvariant": "Single-flight or jittered refresh; origin not overwhelmed.", "severity": "high" },
+      { "category": "malformed-state", "scenario": "Invalidation event arrives out of order with the write.", "expectedInvariant": "No permanent stale-after-write; staleness bounded by TTL.", "severity": "medium" }
+    ],
+    "Persistence": [
+      { "category": "concurrency", "scenario": "Two transactions update the same row; commit order non-deterministic.", "expectedInvariant": "Either explicit lock, optimistic concurrency, or last-writer-wins is documented and tested.", "severity": "medium" }
+    ],
+    "Sync": [
+      { "category": "partial-failure", "scenario": "Network partition mid-sync; both sides accept writes.", "expectedInvariant": "Conflict resolution converges deterministically on reconnect.", "severity": "high" }
+    ],
+    "Realtime": [
+      { "category": "replay", "scenario": "Client reconnects and replays buffered messages out of order.", "expectedInvariant": "Server reorders by sequence id; no duplicate UI state.", "severity": "medium" }
+    ],
+    "Routing": [
+      { "category": "auth-edge", "scenario": "Middleware order changes — unauthenticated request reaches handler.", "expectedInvariant": "Auth runs before any handler with @authenticated semantics.", "severity": "high" }
+    ],
+    "Orchestration": [
+      { "category": "partial-failure", "scenario": "Step 3 of 5 succeeds, step 4 fails permanently.", "expectedInvariant": "Compensating actions run; system reaches a documented terminal state.", "severity": "high" }
+    ],
+    "AI": [
+      { "category": "malformed-state", "scenario": "Tool returns schema-violating JSON to the model.", "expectedInvariant": "Caller validates and either repairs or fails closed; no silent execution of broken payload.", "severity": "high" }
+    ]
+  },
+  "generic": [
+    { "category": "malformed-state", "scenario": "Pass null where the type system says non-null is enforced at boundary.", "expectedInvariant": "Boundary validation rejects; never trusts caller.", "severity": "low" },
+    { "category": "concurrency", "scenario": "Two concurrent invocations interleave at any await boundary.", "expectedInvariant": "No shared mutable state without lock or atomic.", "severity": "medium" }
+  ]
+}

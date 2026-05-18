@@ -26,7 +26,10 @@ export interface CounterfactualResult {
 
 export class CounterfactualEngine {
     private diff = new BehavioralDiffEngine();
-    private risk = new RiskModelingEngine();
+    private risk: RiskModelingEngine;
+    constructor(projectRoot: string = process.cwd()) {
+        this.risk = new RiskModelingEngine(projectRoot);
+    }
 
     public whatIfRevert(
         baseGraph: BehavioralGraph,

@@ -1,35 +1,18 @@
 import { VerificationPlan, VerificationTarget } from '../models/VerificationModels';
 import { RiskReport } from '../models/RiskModels';
-import { WorkflowDomain, WorkflowRiskAggregate } from '../models/WorkflowModels';
+import { WorkflowDomain } from '../models/WorkflowModels';
+import { loadRiskConfig } from '../data/DataLoader';
 
 /**
- * Verification Budget Allocator: given a constrained budget (minutes, or a
- * verification count cap), picks the highest-leverage subset of verification
- * targets to actually run.
+ * Verification Budget Allocator: greedy knapsack over verification targets.
  *
- * Leverage scoring per target:
- *  - tier weight (Tier 3 buys more than Tier 1 when something goes wrong)
- *  - underlying node risk score
- *  - workflow criticality (Payments / Auth / Webhooks > Reporting / Configuration)
- *  - estimated cost in seconds (heuristic from tier)
+ * Leverage score per target =
+ *   (tierLeverage × workflowCriticality × (risk/10)) / tierCostSeconds
  *
- * Solves a greedy knapsack — close to optimal for this shape, far faster than
- * exact DP and good enough for budgets in the human-minutes range.
+ * All weights live in data/risk-config.json (override-able at
+ * .veris/data/risk-config.json). Greedy is near-optimal for budget shapes
+ * in the human-minutes range.
  */
-
-const TIER_LEVERAGE: Record<string, number> = { 'Tier 1': 1, 'Tier 2': 3, 'Tier 3': 7 };
-const TIER_COST_SEC: Record<string, number> = { 'Tier 1': 5, 'Tier 2': 30, 'Tier 3': 120 };
-
-// Workflow criticality multipliers — purely heuristic, plugin-overridable later.
-const WF_CRITICALITY: Record<string, number> = {
-    'Payments': 2.0, 'Authentication': 2.0, 'Authorization': 1.8, 'Webhooks': 1.8,
-    'Billing': 1.7, 'Checkout': 1.7, 'Session': 1.6, 'Persistence': 1.5,
-    'Queue': 1.5, 'Sync': 1.4, 'Orchestration': 1.4, 'Realtime': 1.3,
-    'Caching': 1.2, 'Notifications': 1.1, 'AI': 1.5, 'Routing': 1.4,
-    'Cart': 1.2, 'Search': 1.0, 'Profile': 0.9, 'Admin': 1.2, 'Analytics': 0.8,
-    'Onboarding': 1.0, 'Reporting': 0.7, 'Configuration': 0.7, 'Infrastructure': 0.8,
-    'Core': 1.0, 'Uncategorized': 0.7
-};
 
 export interface BudgetAllocation {
     selected: Array<VerificationTarget & { score: number; estimatedSec: number; workflowName?: string }>;
@@ -41,12 +24,16 @@ export interface BudgetAllocation {
 }
 
 export class VerificationBudgetAllocator {
+
+    constructor(private projectRoot: string = process.cwd()) {}
+
     public allocate(
         plan: VerificationPlan,
         risks: RiskReport[],
         workflows: WorkflowDomain[],
         budgetMinutes: number
     ): BudgetAllocation {
+        const cfg = loadRiskConfig(this.projectRoot).budget;
         const budgetSec = Math.max(0, Math.floor(budgetMinutes * 60));
         const riskByNode = new Map(risks.map(r => [r.nodeId, r.score.overallRisk]));
         const nodeWorkflow = new Map<string, WorkflowDomain>();
@@ -55,13 +42,13 @@ export class VerificationBudgetAllocator {
         type Scored = VerificationTarget & { score: number; estimatedSec: number; workflowName?: string };
         const scored: Scored[] = plan.targets.map(t => {
             const tierKey = t.tier.split(' - ')[0];
-            const tier = TIER_LEVERAGE[tierKey] ?? 1;
-            const cost = TIER_COST_SEC[tierKey] ?? 5;
+            const tier = cfg.tierLeverage[tierKey] ?? 1;
+            const cost = cfg.tierCostSeconds[tierKey] ?? 5;
             const risk = riskByNode.get(t.nodeId) ?? 10;
             const wf = nodeWorkflow.get(t.nodeId);
-            const crit = wf ? (WF_CRITICALITY[wf.kind] ?? 1) : 1;
-            const score = (tier * crit * (risk / 10));
-            return { ...t, score: parseFloat((score / cost).toFixed(4)), estimatedSec: cost, workflowName: wf?.name };
+            const crit = wf ? (cfg.workflowCriticality[wf.kind] ?? 1) : 1;
+            const score = (tier * crit * (risk / 10)) / cost;
+            return { ...t, score: parseFloat(score.toFixed(4)), estimatedSec: cost, workflowName: wf?.name };
         });
 
         scored.sort((a, b) => b.score - a.score);

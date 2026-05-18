@@ -1,0 +1,145 @@
+{
+  "$schema": "veris://schema/workflow-rules.v1",
+  "description": "Default workflow classifier rules. Override per-repo by dropping a file with the same shape at .veris/data/workflow-rules.json or extend via .veris/plugins/*.js using api.addWorkflowRule.",
+  "rules": [
+    {
+      "kind": "Authentication",
+      "pathTokens": ["auth", "login", "signup", "signin", "oauth", "sso", "jwt"],
+      "importTokens": ["passport", "jsonwebtoken", "bcrypt", "argon2", "@auth/", "next-auth", "firebase/auth", "@clerk/", "supabase/auth"],
+      "symbolTokens": ["login", "signup", "signin", "authenticate", "verifytoken", "issuetoken", "refreshtoken", "oauth"]
+    },
+    {
+      "kind": "Authorization",
+      "pathTokens": ["authz", "permission", "policy", "rbac", "acl", "guard"],
+      "importTokens": ["casl", "oso", "cerbos", "permit"],
+      "symbolTokens": ["authorize", "haspermission", "enforcepolicy", "checkrole"]
+    },
+    {
+      "kind": "Session",
+      "pathTokens": ["session"],
+      "importTokens": ["express-session", "iron-session", "cookie-session"],
+      "symbolTokens": ["session", "cookie"]
+    },
+    {
+      "kind": "Payments",
+      "pathTokens": ["payment", "charge", "stripe", "paypal", "braintree"],
+      "importTokens": ["stripe", "paypal", "braintree", "@stripe/", "square", "razorpay"],
+      "symbolTokens": ["processpayment", "charge", "refund", "capturepayment"]
+    },
+    {
+      "kind": "Billing",
+      "pathTokens": ["billing", "invoice", "subscription", "pricing"],
+      "symbolTokens": ["invoice", "subscription", "meter", "billing"]
+    },
+    {
+      "kind": "Checkout",
+      "pathTokens": ["checkout", "order"],
+      "symbolTokens": ["checkout", "placeorder", "finalizeorder"]
+    },
+    {
+      "kind": "Cart",
+      "pathTokens": ["cart", "basket"],
+      "symbolTokens": ["cart", "basket", "additem", "removeitem"]
+    },
+    {
+      "kind": "Notifications",
+      "pathTokens": ["notif", "email", "sms", "push"],
+      "importTokens": ["nodemailer", "sendgrid", "mailgun", "postmark", "twilio", "firebase-admin/messaging", "expo-server-sdk"],
+      "symbolTokens": ["sendemail", "sendnotification", "sendsms", "notify", "sendpush"]
+    },
+    {
+      "kind": "Webhooks",
+      "pathTokens": ["webhook", "callback"],
+      "symbolTokens": ["webhook", "handleevent", "verifysignature"]
+    },
+    {
+      "kind": "Realtime",
+      "pathTokens": ["socket", "realtime", "ws", "pubsub"],
+      "importTokens": ["socket.io", "ws", "pusher", "ably", "centrifuge"],
+      "symbolTokens": ["emit", "broadcast", "subscribechannel"]
+    },
+    {
+      "kind": "Queue",
+      "pathTokens": ["queue", "worker", "job"],
+      "importTokens": ["bullmq", "bull", "agenda", "kue", "rabbitmq", "amqplib", "kafkajs", "sqs", "@aws-sdk/client-sqs"],
+      "symbolTokens": ["enqueue", "dequeue", "processjob", "consumer", "producer"]
+    },
+    {
+      "kind": "Caching",
+      "pathTokens": ["cache"],
+      "importTokens": ["redis", "ioredis", "memcached", "node-cache", "lru-cache"],
+      "symbolTokens": ["cache", "invalidate", "evict", "memoize"]
+    },
+    {
+      "kind": "Persistence",
+      "pathTokens": ["db", "database", "models", "repositories", "dao", "migrations", "schemas"],
+      "importTokens": ["prisma", "typeorm", "sequelize", "mongoose", "drizzle", "knex", "pg", "mysql2", "mongodb", "@supabase/", "firebase-admin/firestore", "better-sqlite3"],
+      "symbolTokens": ["findby", "findone", "findall", "upsert", "migrate", "transaction"]
+    },
+    {
+      "kind": "Sync",
+      "pathTokens": ["sync", "replicate", "replication"],
+      "symbolTokens": ["sync", "replicate", "reconcile"]
+    },
+    {
+      "kind": "Search",
+      "pathTokens": ["search", "elastic", "meili"],
+      "importTokens": ["elasticsearch", "meilisearch", "algolia", "typesense"],
+      "symbolTokens": ["indexdocument", "searchquery", "reindex"]
+    },
+    {
+      "kind": "Onboarding",
+      "pathTokens": ["onboard", "welcome", "invite"],
+      "symbolTokens": ["onboard", "invite", "completeonboarding"]
+    },
+    {
+      "kind": "Profile",
+      "pathTokens": ["profile", "account"],
+      "symbolTokens": ["profile", "updateprofile", "getuser"]
+    },
+    {
+      "kind": "Admin",
+      "pathTokens": ["admin", "console", "backoffice"],
+      "symbolTokens": ["admin", "moderation"]
+    },
+    {
+      "kind": "Analytics",
+      "pathTokens": ["analytic", "telemetry", "tracking", "metric"],
+      "importTokens": ["mixpanel", "segment", "amplitude", "posthog", "@datadog/", "prom-client"],
+      "symbolTokens": ["track", "logevent", "instrument", "metric"]
+    },
+    {
+      "kind": "AI",
+      "pathTokens": ["ai", "llm", "agent", "prompt", "embedding", "rag"],
+      "importTokens": ["openai", "@anthropic-ai/", "langchain", "llamaindex", "pinecone", "@modelcontextprotocol/sdk", "ts-morph"],
+      "symbolTokens": ["prompt", "completion", "embed", "chat", "tool"]
+    },
+    {
+      "kind": "Routing",
+      "pathTokens": ["route", "router", "controller", "handler", "api/", "pages/api", "app/api"],
+      "importTokens": ["express", "fastify", "koa", "next/server", "@nestjs/"],
+      "symbolTokens": ["get", "post", "put", "delete", "handler"]
+    },
+    {
+      "kind": "Orchestration",
+      "pathTokens": ["orchestr", "workflow", "saga", "pipeline"],
+      "importTokens": ["temporal", "inngest", "trigger.dev"],
+      "symbolTokens": ["orchestrate", "pipeline", "step", "saga"]
+    },
+    {
+      "kind": "Reporting",
+      "pathTokens": ["report", "dashboard"],
+      "symbolTokens": ["generatereport", "tomarkdown", "tohtml", "rendermarkdown"]
+    },
+    {
+      "kind": "Configuration",
+      "pathTokens": ["config", "env", "setting"],
+      "symbolTokens": ["loadconfig", "parseenv", "configure"]
+    },
+    {
+      "kind": "Infrastructure",
+      "pathTokens": ["infra", "deploy", "ci", "pipeline", ".github/", "docker", "k8s", "terraform"],
+      "symbolTokens": ["build", "deploy", "provision"]
+    }
+  ]
+}

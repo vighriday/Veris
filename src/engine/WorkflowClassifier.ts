@@ -1,4 +1,4 @@
-import { RepositoryIntelligenceReport, VerisFile } from '../models/EntityModels';
+import { RepositoryIntelligenceReport } from '../models/EntityModels';
 import { BehavioralGraph, GraphNode } from '../models/GraphModels';
 import { DiffReport } from '../models/RiskModels';
 import { RiskReport } from '../models/RiskModels';
@@ -7,130 +7,29 @@ import {
     WorkflowReport, WorkflowRiskAggregate
 } from '../models/WorkflowModels';
 import { ExternalWorkflowRule } from '../plugins/PluginLoader';
+import { loadWorkflowRules, loadRuntimeRisks, WorkflowRuleData, RuntimeRiskData } from '../data/DataLoader';
 
 interface Rule {
-    kind: WorkflowKind;
-    pathTokens?: string[];      // matched via includes against filePath (lowercased)
-    importTokens?: string[];    // matched as substring against module specifiers
-    symbolTokens?: string[];    // matched against class/method/function names (lowercased)
-    weight?: number;            // base signal weight (default 1)
+    kind: string;
+    pathTokens?: string[];
+    importTokens?: string[];
+    symbolTokens?: string[];
+    weight?: number;
 }
-
-/**
- * Heuristic rule set. Order matters only for tie-breaks; multi-match aggregates.
- * Tokens are matched as case-insensitive substrings to be tolerant of naming.
- */
-const RULES: Rule[] = [
-    { kind: WorkflowKind.Authentication, pathTokens: ['auth', 'login', 'signup', 'signin', 'oauth', 'sso', 'jwt'],
-      importTokens: ['passport', 'jsonwebtoken', 'bcrypt', 'argon2', '@auth/', 'next-auth', 'firebase/auth', '@clerk/', 'supabase/auth'],
-      symbolTokens: ['login', 'signup', 'signin', 'authenticate', 'verifytoken', 'issuetoken', 'refreshtoken', 'oauth'] },
-
-    { kind: WorkflowKind.Authorization, pathTokens: ['authz', 'permission', 'policy', 'rbac', 'acl', 'guard'],
-      importTokens: ['casl', 'oso', 'cerbos', 'permit'], symbolTokens: ['authorize', 'haspermission', 'enforcepolicy', 'checkrole'] },
-
-    { kind: WorkflowKind.Session, pathTokens: ['session'], importTokens: ['express-session', 'iron-session', 'cookie-session'],
-      symbolTokens: ['session', 'cookie'] },
-
-    { kind: WorkflowKind.Payments, pathTokens: ['payment', 'charge', 'stripe', 'paypal', 'braintree'],
-      importTokens: ['stripe', 'paypal', 'braintree', '@stripe/', 'square', 'razorpay'],
-      symbolTokens: ['processpayment', 'charge', 'refund', 'capturepayment'] },
-
-    { kind: WorkflowKind.Billing, pathTokens: ['billing', 'invoice', 'subscription', 'plan', 'pricing'],
-      symbolTokens: ['invoice', 'subscription', 'plan', 'meter', 'billing'] },
-
-    { kind: WorkflowKind.Checkout, pathTokens: ['checkout', 'order'], symbolTokens: ['checkout', 'placeorder', 'finalizeorder'] },
-
-    { kind: WorkflowKind.Cart, pathTokens: ['cart', 'basket'], symbolTokens: ['cart', 'basket', 'additem', 'removeitem'] },
-
-    { kind: WorkflowKind.Notifications, pathTokens: ['notif', 'email', 'sms', 'push'],
-      importTokens: ['nodemailer', 'sendgrid', 'mailgun', 'postmark', 'twilio', 'firebase-admin/messaging', 'expo-server-sdk'],
-      symbolTokens: ['sendemail', 'sendnotification', 'sendsms', 'notify', 'sendpush'] },
-
-    { kind: WorkflowKind.Webhooks, pathTokens: ['webhook', 'callback'], symbolTokens: ['webhook', 'handleevent', 'verifysignature'] },
-
-    { kind: WorkflowKind.Realtime, pathTokens: ['socket', 'realtime', 'ws', 'pubsub'],
-      importTokens: ['socket.io', 'ws', 'pusher', 'ably', 'centrifuge'], symbolTokens: ['emit', 'broadcast', 'subscribechannel'] },
-
-    { kind: WorkflowKind.Queue, pathTokens: ['queue', 'worker', 'job'],
-      importTokens: ['bullmq', 'bull', 'agenda', 'kue', 'rabbitmq', 'amqplib', 'kafkajs', 'sqs', '@aws-sdk/client-sqs'],
-      symbolTokens: ['enqueue', 'dequeue', 'processjob', 'consumer', 'producer'] },
-
-    { kind: WorkflowKind.Caching, pathTokens: ['cache'], importTokens: ['redis', 'ioredis', 'memcached', 'node-cache', 'lru-cache'],
-      symbolTokens: ['cache', 'invalidate', 'evict', 'memoize'] },
-
-    { kind: WorkflowKind.Persistence, pathTokens: ['db', 'database', 'model', 'repository', 'repo', 'dao', 'migration', 'schema'],
-      importTokens: ['prisma', 'typeorm', 'sequelize', 'mongoose', 'drizzle', 'knex', 'pg', 'mysql2', 'mongodb', '@supabase/', 'firebase-admin/firestore'],
-      symbolTokens: ['save', 'findby', 'findone', 'findall', 'create', 'update', 'delete', 'upsert', 'migrate'] },
-
-    { kind: WorkflowKind.Sync, pathTokens: ['sync', 'replicate', 'replication'], symbolTokens: ['sync', 'replicate', 'reconcile'] },
-
-    { kind: WorkflowKind.Search, pathTokens: ['search', 'index', 'elastic', 'meili'],
-      importTokens: ['elasticsearch', 'meilisearch', 'algolia', 'typesense'], symbolTokens: ['indexdocument', 'searchquery', 'reindex'] },
-
-    { kind: WorkflowKind.Onboarding, pathTokens: ['onboard', 'welcome', 'invite'], symbolTokens: ['onboard', 'invite', 'completeonboarding'] },
-
-    { kind: WorkflowKind.Profile, pathTokens: ['profile', 'user', 'account'], symbolTokens: ['profile', 'updateprofile', 'getuser'] },
-
-    { kind: WorkflowKind.Admin, pathTokens: ['admin', 'console', 'backoffice'], symbolTokens: ['admin', 'moderation'] },
-
-    { kind: WorkflowKind.Analytics, pathTokens: ['analytic', 'telemetry', 'tracking', 'metric'],
-      importTokens: ['mixpanel', 'segment', 'amplitude', 'posthog', '@datadog/', 'prom-client'],
-      symbolTokens: ['track', 'logevent', 'instrument', 'metric'] },
-
-    { kind: WorkflowKind.AI, pathTokens: ['ai', 'llm', 'agent', 'prompt', 'embedding', 'rag'],
-      importTokens: ['openai', '@anthropic-ai/', 'langchain', 'llamaindex', 'pinecone', '@modelcontextprotocol/sdk', 'ts-morph'],
-      symbolTokens: ['prompt', 'completion', 'embed', 'chat', 'tool'] },
-
-    { kind: WorkflowKind.Routing, pathTokens: ['route', 'router', 'controller', 'handler', 'api/', 'pages/api', 'app/api'],
-      importTokens: ['express', 'fastify', 'koa', 'next/server', '@nestjs/'], symbolTokens: ['get', 'post', 'put', 'delete', 'handler'] },
-
-    { kind: WorkflowKind.Orchestration, pathTokens: ['orchestr', 'workflow', 'saga', 'pipeline'],
-      importTokens: ['temporal', 'inngest', 'trigger.dev'], symbolTokens: ['orchestrate', 'pipeline', 'step', 'saga'] },
-
-    { kind: WorkflowKind.Reporting, pathTokens: ['report', 'dashboard', 'export'],
-      symbolTokens: ['generatereport', 'render', 'export', 'tomarkdown', 'tohtml'] },
-
-    { kind: WorkflowKind.Configuration, pathTokens: ['config', 'env', 'setting'],
-      symbolTokens: ['loadconfig', 'parseenv', 'configure'] },
-
-    { kind: WorkflowKind.Infrastructure, pathTokens: ['infra', 'deploy', 'ci', 'pipeline', '.github/', 'docker', 'k8s', 'terraform'],
-      symbolTokens: ['build', 'deploy', 'provision'] }
-];
-
-/**
- * Workflow narrative templates per kind. Used to produce prose impact summaries.
- */
-const RUNTIME_RISKS: Partial<Record<WorkflowKind, string[]>> = {
-    [WorkflowKind.Authentication]: ['stale session propagation', 'token expiry race', 'oauth refresh under retry'],
-    [WorkflowKind.Authorization]: ['role-cache staleness', 'policy drift', 'permission bypass on degraded state'],
-    [WorkflowKind.Session]: ['cookie/session desync', 'concurrent session race'],
-    [WorkflowKind.Payments]: ['double-charge under retry', 'partial-capture failure', 'idempotency-key collision'],
-    [WorkflowKind.Billing]: ['proration drift', 'subscription state mismatch', 'invoice/usage race'],
-    [WorkflowKind.Checkout]: ['cart-to-order desync', 'inventory oversell', 'price drift on retry'],
-    [WorkflowKind.Cart]: ['stale cart on multi-device', 'price recompute race'],
-    [WorkflowKind.Notifications]: ['duplicate delivery on retry', 'fan-out amplification', 'opt-out staleness'],
-    [WorkflowKind.Webhooks]: ['retry amplification on non-idempotent handlers', 'signature replay', 'ordering inversion'],
-    [WorkflowKind.Realtime]: ['reconnect storm', 'message replay', 'auth-refresh mid-stream'],
-    [WorkflowKind.Queue]: ['poison-message loop', 'duplicate-job processing', 'visibility-timeout drift'],
-    [WorkflowKind.Caching]: ['stale-after-write', 'thundering herd on invalidation', 'cache stampede'],
-    [WorkflowKind.Persistence]: ['transaction boundary leak', 'migration ordering hazard', 'N+1 on hot path'],
-    [WorkflowKind.Sync]: ['split-brain on partition', 'replication lag drift', 'conflict resolution skew'],
-    [WorkflowKind.Search]: ['index staleness vs source', 'reindex storm'],
-    [WorkflowKind.Routing]: ['middleware ordering shift', 'auth bypass via route change'],
-    [WorkflowKind.Orchestration]: ['edge-case deadlock', 'partial-step recovery hazard'],
-    [WorkflowKind.AI]: ['prompt drift', 'tool-call schema break', 'context-window overflow']
-};
 
 export class WorkflowClassifier {
     private extraRules: Rule[] = [];
     private extraRiskTexts: Record<string, string[]> = {};
+    private projectRoot: string;
+
+    constructor(projectRoot: string = process.cwd()) {
+        this.projectRoot = projectRoot;
+    }
 
     public ingestPluginRules(rules: ExternalWorkflowRule[]): void {
         for (const r of rules) {
-            // Map external string kind to enum if it matches; else keep raw.
-            const kind = (WorkflowKind as any)[r.kind] || r.kind as any;
             this.extraRules.push({
-                kind,
+                kind: r.kind,
                 pathTokens: r.pathTokens,
                 importTokens: r.importTokens,
                 symbolTokens: r.symbolTokens,
@@ -149,10 +48,12 @@ export class WorkflowClassifier {
         report: RepositoryIntelligenceReport,
         graph: BehavioralGraph
     ): WorkflowDomain[] {
-        // Index node -> votes per kind
-        const nodeKindVotes: Map<string, Map<WorkflowKind, { score: number; signals: WorkflowSignal[] }>> = new Map();
+        const baseRules: WorkflowRuleData[] = loadWorkflowRules(this.projectRoot);
+        const allRules: Rule[] = baseRules.concat(this.extraRules);
 
-        const addVote = (nodeId: string, kind: WorkflowKind, signal: WorkflowSignal) => {
+        const nodeKindVotes: Map<string, Map<string, { score: number; signals: WorkflowSignal[] }>> = new Map();
+
+        const addVote = (nodeId: string, kind: string, signal: WorkflowSignal) => {
             let kindMap = nodeKindVotes.get(nodeId);
             if (!kindMap) { kindMap = new Map(); nodeKindVotes.set(nodeId, kindMap); }
             let entry = kindMap.get(kind);
@@ -166,15 +67,33 @@ export class WorkflowClassifier {
 
         for (const file of report.files) {
             const filePathLower = file.filePath.toLowerCase();
+            const pathSegments = filePathLower.split(/[\\\/]/).filter(s => s.length > 0);
+            const anchorIdx = pathSegments.findIndex(s => s === 'src' || s === 'lib' || s === 'app' || s === 'packages' || s === 'apps' || s === 'test-project');
+            const relevantSegments = anchorIdx >= 0 ? pathSegments.slice(anchorIdx + 1) : pathSegments.slice(-4);
+            const segmentSet = new Set(relevantSegments);
+            const segmentBareSet = new Set([...segmentSet].map(s => s.replace(/\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs)$/i, '')));
             const fileImportsLower = (file.imports || []).map(i => i.toLowerCase());
 
-            // Collect file-level kind votes from path + imports
-            const fileSignals: { kind: WorkflowKind; signal: WorkflowSignal }[] = [];
-            const allRules = RULES.concat(this.extraRules);
+            const matchesPathToken = (tok: string): boolean => {
+                if (segmentSet.has(tok) || segmentBareSet.has(tok)) return true;
+                for (const seg of segmentBareSet) {
+                    if (seg.startsWith(tok) && seg.length > tok.length) {
+                        const rest = seg.slice(tok.length);
+                        if (rest.length <= 4 && /^[a-z]+$/.test(rest)) return true;
+                    }
+                }
+                if (tok.includes('/')) {
+                    const scoped = relevantSegments.join('/');
+                    return scoped.includes(tok);
+                }
+                return false;
+            };
+
+            const fileSignals: { kind: string; signal: WorkflowSignal }[] = [];
             for (const rule of allRules) {
                 const weight = rule.weight ?? 1;
                 for (const tok of rule.pathTokens || []) {
-                    if (filePathLower.includes(tok)) {
+                    if (matchesPathToken(tok)) {
                         fileSignals.push({ kind: rule.kind, signal: { source: 'path', value: tok, weight: weight * 2 } });
                     }
                 }
@@ -185,14 +104,18 @@ export class WorkflowClassifier {
                 }
             }
 
-            // Symbol-level votes — class + method + function names
-            const symbolVotes: { symbolKey: string; kind: WorkflowKind; signal: WorkflowSignal }[] = [];
-            const checkSymbol = (name: string, symbolKey: string) => {
+            const matchesSymbol = (name: string, tok: string): boolean => {
                 const lower = name.toLowerCase();
+                if (lower === tok) return true;
+                const re = new RegExp('(^|[^a-z0-9])' + tok.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '($|[^a-z0-9])', 'i');
+                return re.test(name);
+            };
+            const symbolVotes: { symbolKey: string; kind: string; signal: WorkflowSignal }[] = [];
+            const checkSymbol = (name: string, symbolKey: string) => {
                 for (const rule of allRules) {
                     const weight = rule.weight ?? 1;
                     for (const tok of rule.symbolTokens || []) {
-                        if (lower.includes(tok)) {
+                        if (matchesSymbol(name, tok)) {
                             symbolVotes.push({ symbolKey, kind: rule.kind, signal: { source: 'symbol', value: tok, weight } });
                         }
                     }
@@ -209,35 +132,31 @@ export class WorkflowClassifier {
                 checkSymbol(fn.name, `${file.filePath}::${fn.name}`);
             }
 
-            // Apply file signals to all nodes whose id begins with this file path
             const fileNodes = allNodes.filter(n => n.id.startsWith(file.filePath + '::'));
             for (const { kind, signal } of fileSignals) {
                 for (const node of fileNodes) addVote(node.id, kind, signal);
             }
-            // Apply symbol signals to their specific node
             for (const { symbolKey, kind, signal } of symbolVotes) {
                 if (nodeById.has(symbolKey)) addVote(symbolKey, kind, signal);
             }
         }
 
-        // Bucket nodes by their winning kind
-        const domainBuckets: Map<WorkflowKind, { nodeIds: string[]; signals: WorkflowSignal[]; rawScoreSum: number }> = new Map();
+        const domainBuckets: Map<string, { nodeIds: string[]; signals: WorkflowSignal[]; rawScoreSum: number }> = new Map();
         for (const node of allNodes) {
             const votes = nodeKindVotes.get(node.id);
             if (!votes || votes.size === 0) {
-                // unassigned: park in Uncategorized
-                let bucket = domainBuckets.get(WorkflowKind.Uncategorized);
-                if (!bucket) { bucket = { nodeIds: [], signals: [], rawScoreSum: 0 }; domainBuckets.set(WorkflowKind.Uncategorized, bucket); }
+                const kind = WorkflowKind.Uncategorized;
+                let bucket = domainBuckets.get(kind);
+                if (!bucket) { bucket = { nodeIds: [], signals: [], rawScoreSum: 0 }; domainBuckets.set(kind, bucket); }
                 bucket.nodeIds.push(node.id);
                 continue;
             }
-            // Pick best-scoring kind
-            let best: { kind: WorkflowKind; score: number; signals: WorkflowSignal[] } | null = null;
+            let best: { kind: string; score: number; signals: WorkflowSignal[] } | null = null;
             votes.forEach((entry, kind) => {
                 if (!best || entry.score > best.score) best = { kind, score: entry.score, signals: entry.signals };
             });
             if (!best) continue;
-            const winner = best as { kind: WorkflowKind; score: number; signals: WorkflowSignal[] };
+            const winner = best as { kind: string; score: number; signals: WorkflowSignal[] };
             let bucket = domainBuckets.get(winner.kind);
             if (!bucket) { bucket = { nodeIds: [], signals: [], rawScoreSum: 0 }; domainBuckets.set(winner.kind, bucket); }
             bucket.nodeIds.push(node.id);
@@ -249,7 +168,6 @@ export class WorkflowClassifier {
         domainBuckets.forEach((bucket, kind) => {
             if (bucket.nodeIds.length === 0) return;
             const id = kind.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-            // Dedupe signals by source+value
             const seen = new Set<string>();
             const uniqSignals = bucket.signals.filter(s => {
                 const k = `${s.source}:${s.value}`;
@@ -257,20 +175,15 @@ export class WorkflowClassifier {
                 seen.add(k);
                 return true;
             }).slice(0, 12);
-            // Confidence: scaled by average evidence per node, capped 0..100
             const avg = bucket.rawScoreSum / bucket.nodeIds.length;
             const confidence = kind === WorkflowKind.Uncategorized ? 0 : Math.min(100, Math.round(avg * 18));
             domains.push({
-                id,
-                name: kind,
-                kind,
+                id, name: kind, kind: kind as WorkflowKind,
                 memberNodeIds: bucket.nodeIds,
-                signals: uniqSignals,
-                confidence
+                signals: uniqSignals, confidence
             });
         });
 
-        // Stable sort: largest workflows first, Uncategorized last
         domains.sort((a, b) => {
             if (a.kind === WorkflowKind.Uncategorized) return 1;
             if (b.kind === WorkflowKind.Uncategorized) return -1;
@@ -285,6 +198,7 @@ export class WorkflowClassifier {
         diff: DiffReport,
         risks: RiskReport[]
     ): WorkflowRiskAggregate[] {
+        const runtimeRiskCatalog: RuntimeRiskData = loadRuntimeRisks(this.projectRoot);
         const impactedSet = new Set(diff.impactedNodes.map(n => n.id));
         const addedSet = new Set(diff.addedNodes.map(n => n.id));
         const removedSet = new Set(diff.removedNodes.map(n => n.id));
@@ -308,7 +222,7 @@ export class WorkflowClassifier {
             const blastSum = memberRisks.reduce((s, r) => s + r.score.blastRadius, 0);
 
             const narrative = buildNarrative(d, members, impacted, added, removed, avgRisk);
-            const runtimeRisks = (RUNTIME_RISKS[d.kind] || []).slice();
+            const runtimeRisks = (runtimeRiskCatalog[d.kind] || []).slice();
             const extraTexts = this.extraRiskTexts[d.kind] || this.extraRiskTexts[d.name] || [];
             for (const t of extraTexts) if (!runtimeRisks.includes(t)) runtimeRisks.push(t);
             if (impacted.length > 0 && runtimeRisks.length === 0) {
@@ -326,9 +240,7 @@ export class WorkflowClassifier {
                 averageRisk: parseFloat(avgRisk.toFixed(2)),
                 maxRisk: parseFloat(maxRisk.toFixed(2)),
                 blastRadiusSum: blastSum,
-                topRisks,
-                narrative,
-                runtimeRisks
+                topRisks, narrative, runtimeRisks
             };
         }).sort((a, b) => b.maxRisk - a.maxRisk || b.impactedCount - a.impactedCount);
     }
