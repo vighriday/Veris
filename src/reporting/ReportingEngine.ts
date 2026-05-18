@@ -3,6 +3,12 @@ import * as path from 'path';
 import { RiskReport, DiffReport } from '../models/RiskModels';
 import { VerificationPlan, ConfidenceReport, VerificationTarget } from '../models/VerificationModels';
 import { BehavioralGraph, GraphNode, GraphEdge, NodeType, EdgeType } from '../models/GraphModels';
+import { WorkflowReport } from '../models/WorkflowModels';
+import { DriftReport } from '../engine/DriftDetector';
+import { WorkflowFingerprint } from '../engine/WorkflowFingerprint';
+import { AdversarialProbe } from '../engine/AdversarialProbeGenerator';
+import { BudgetAllocation } from '../engine/VerificationBudgetAllocator';
+import { ConfidenceTrendRow } from '../persistence/VerisState';
 
 export interface ReportMeta {
     diffMode?: 'git' | 'synthetic' | string;
@@ -19,6 +25,14 @@ export interface DashboardPayload {
     risks: RiskReport[];
     plan: VerificationPlan;
     confidence: ConfidenceReport;
+    workflows?: WorkflowReport;
+    drift?: DriftReport;
+    fingerprints?: WorkflowFingerprint[];
+    probes?: AdversarialProbe[];
+    budget?: BudgetAllocation;
+    confidenceTrend?: ConfidenceTrendRow[];
+    pluginsLoaded?: string[];
+    runId?: string;
 }
 
 export class ReportingEngine {
@@ -227,6 +241,42 @@ function renderDashboard(payload: DashboardPayload): string {
   .scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
   .toast { position: fixed; bottom: 20px; right: 20px; background: var(--ok); color:#0a0c10; padding: 10px 16px; border-radius: 6px; font-weight:600; opacity: 0; transition: opacity 0.3s; pointer-events:none; }
   .toast.show { opacity: 1; }
+  .workflow-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+  .workflow-card { background: var(--panel2); border:1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 8px; padding: 14px; position:relative; cursor:pointer; transition: transform 0.15s; }
+  .workflow-card:hover { transform: translateY(-1px); border-color: var(--accent); }
+  .workflow-card.risk-high { border-left-color: var(--danger); }
+  .workflow-card.risk-med  { border-left-color: var(--warn); }
+  .workflow-card.risk-low  { border-left-color: var(--ok); }
+  .workflow-card.untouched { opacity: 0.55; }
+  .workflow-card h3 { margin: 0 0 6px; font-size: 14px; }
+  .workflow-card .narr { font-size: 12px; color: var(--muted); line-height: 1.5; margin-bottom: 8px; }
+  .workflow-card .meta-row { display:flex; gap:8px; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .workflow-card .risk-num { font-size: 22px; font-weight: 700; }
+  .workflow-card .risks-list { margin-top: 8px; font-size: 11px; color: var(--warn); }
+  .workflow-card .risks-list li { margin-left: 14px; }
+  .workflow-card .signals { margin-top: 8px; font-size: 10px; color: var(--muted); font-family: monospace; max-height: 36px; overflow:hidden; }
+  .heatmap { display:grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; }
+  .heatcell { padding: 12px 10px; border-radius: 6px; font-size: 12px; color: #0a0c10; font-weight: 600; cursor:pointer; transition: transform 0.1s; min-height: 56px; display:flex; flex-direction:column; justify-content:space-between; }
+  .heatcell:hover { transform: scale(1.03); }
+  .heatcell .v { font-size: 18px; font-weight: 700; }
+  .heatcell .lbl { font-size: 10px; text-transform:uppercase; letter-spacing: 0.04em; }
+  .drift-item { background:var(--panel2); border-left: 3px solid var(--accent); padding: 8px 12px; margin-bottom: 6px; border-radius: 4px; font-size: 12px; }
+  .drift-item.changed { border-left-color: var(--warn); }
+  .drift-item.silent { border-left-color: var(--danger); }
+  .drift-item.oscillating { border-left-color: var(--danger); background: rgba(255,93,108,0.05); }
+  .probe-item { background:var(--panel2); border-radius: 6px; padding: 10px 12px; margin-bottom: 6px; border-left: 3px solid var(--accent); }
+  .probe-item.severity-high { border-left-color: var(--danger); }
+  .probe-item.severity-medium { border-left-color: var(--warn); }
+  .probe-item.severity-low { border-left-color: var(--ok); }
+  .probe-item .cat { display:inline-block; padding: 1px 6px; background: var(--bg); border-radius: 4px; font-size: 10px; color: var(--muted); margin-right: 6px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .probe-item .scen { font-size: 13px; margin: 6px 0; }
+  .probe-item .inv { font-size: 11px; color: var(--muted); font-style: italic; }
+  .budget-row { display:grid; grid-template-columns: 60px 1fr 80px 60px; gap: 8px; padding: 6px 10px; font-size: 12px; align-items: center; border-bottom: 1px solid var(--border); }
+  .budget-row:hover { background: var(--panel2); }
+  .badge-tier { display:inline-block; padding:1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; }
+  .badge-tier.t1 { background: rgba(79,140,255,0.2); color: var(--accent); }
+  .badge-tier.t2 { background: rgba(255,179,71,0.2); color: var(--warn); }
+  .badge-tier.t3 { background: rgba(255,93,108,0.2); color: var(--danger); }
   @media (max-width: 1000px) { .layout { grid-template-columns: 1fr 1fr; } .half { grid-column: span 1; } }
   @media (max-width: 700px)  { .layout { grid-template-columns: 1fr; } }
 </style>
@@ -279,9 +329,64 @@ function renderDashboard(payload: DashboardPayload): string {
     <div class="explain">Total directives: <strong>${payload.plan.targets.length}</strong></div>
   </div>
 
+  <!-- Affected Behaviors (Hero) -->
+  <div class="card full" id="workflowsCard">
+    <h2>Affected Behaviors <span style="text-transform:none; color:var(--muted); font-size:12px; margin-left:8px;">click a workflow to filter the rest of the dashboard</span></h2>
+    <div id="workflowGrid" class="workflow-grid"></div>
+  </div>
+
+  <!-- Confidence Heatmap (per-workflow) -->
+  <div class="card full" id="heatmapCard">
+    <h2>Confidence Heatmap</h2>
+    <div id="heatmap" class="heatmap"></div>
+    <div class="explain">Cell color = max risk in that workflow. Hover for detail. Click to filter.</div>
+  </div>
+
+  <!-- Confidence Trend -->
+  <div class="card half" id="trendCard">
+    <h2>Confidence Over Time</h2>
+    <svg id="trendChart" width="100%" height="120" viewBox="0 0 400 120" preserveAspectRatio="none"></svg>
+    <div class="explain" id="trendNote"></div>
+  </div>
+
+  <!-- Drift -->
+  <div class="card half" id="driftCard">
+    <h2>Behavioral Drift</h2>
+    <div id="driftSummary" class="explain"></div>
+    <div id="driftList" class="scroll" style="max-height: 200px"></div>
+  </div>
+
+  <!-- Adversarial Probes -->
+  <div class="card full" id="probesCard">
+    <h2>Adversarial Probes (Tier 3 hypotheses)</h2>
+    <div class="filters">
+      <input id="probeFilter" placeholder="Filter probes by node or workflow..." />
+      <select id="probeSeverity">
+        <option value="">All severities</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
+      </select>
+      <button class="copy-btn" id="copyAllProbes" style="padding:6px 12px">Copy ALL filtered probes</button>
+    </div>
+    <div id="probeList" class="scroll"></div>
+  </div>
+
+  <!-- Verification Budget -->
+  <div class="card full" id="budgetCard">
+    <h2>Verification Budget Allocator</h2>
+    <div class="filters">
+      <label style="font-size:12px;color:var(--muted)">Budget (min): <input id="budgetInput" type="number" min="1" max="600" value="15" style="width:80px"></label>
+      <button class="copy-btn" id="recomputeBudget" style="padding:6px 12px">Recompute</button>
+      <button class="copy-btn" id="copyBudgetPrompt" style="padding:6px 12px; background: var(--ok); color:#0a0c10">Copy plan to clipboard</button>
+    </div>
+    <div id="budgetNarrative" class="explain"></div>
+    <div id="budgetList" class="scroll"></div>
+  </div>
+
   <!-- Workflow Risk Map -->
   <div class="card full">
-    <h2>Workflow Risk Map (Behavioral Graph)</h2>
+    <h2>Workflow Risk Map (Behavioral Graph) <span id="graphFilterLabel" style="text-transform:none; color:var(--muted); font-size:12px; margin-left:8px;"></span></h2>
     <div id="graph"></div>
     <div class="legend">
       <span><span class="dot" style="background:#5b8def"></span>Service / Class</span>
@@ -390,24 +495,43 @@ const addedSet = new Set((PAYLOAD.diff.addedNodes || []).map(n => n.id));
 const riskMap = {};
 (PAYLOAD.risks || []).forEach(r => { riskMap[r.nodeId] = r.score; });
 
-// Graph viz via vis-network
-const nodeTypeColor = { 0: '#5b8def', 1: '#ffb347', 2: '#9b89ff', 3: '#6ad7c1', 4: '#c897f0' };
+// Workflow indexes
+const WORKFLOWS = (PAYLOAD.workflows && PAYLOAD.workflows.aggregates) || [];
+const WF_DOMAINS = (PAYLOAD.workflows && PAYLOAD.workflows.workflows) || [];
+const nodeToWorkflow = {}; // nodeId -> workflowId
+WF_DOMAINS.forEach(d => { (d.memberNodeIds || []).forEach(id => { nodeToWorkflow[id] = d.id; }); });
+let activeWorkflowFilter = null;
+
+const wfColorPalette = ['#5b8def','#9b89ff','#6ad7c1','#ffb347','#c897f0','#ff8da1','#62c9ff','#a8e6cf','#ffd966','#f6a6b2','#7ed6df','#dcd6f7'];
+const workflowColors = {};
+WF_DOMAINS.forEach((d, i) => { workflowColors[d.id] = wfColorPalette[i % wfColorPalette.length]; });
+
+// Graph viz via vis-network — nodes colored by workflow when available
+const nodeTypeColorFallback = { 0: '#5b8def', 1: '#ffb347', 2: '#9b89ff', 3: '#6ad7c1', 4: '#c897f0' };
+function nodeColor(n) {
+  const wfId = nodeToWorkflow[n.id];
+  if (wfId && workflowColors[wfId]) return workflowColors[wfId];
+  return nodeTypeColorFallback[n.type] || '#9b89ff';
+}
 const visNodes = (PAYLOAD.graph.nodes || []).map(n => {
   const risk = riskMap[n.id];
-  let color = nodeTypeColor[n.type] || '#9b89ff';
+  const color = nodeColor(n);
   let borderColor = color;
   if (risk && risk.overallRisk >= 50) { borderColor = '#ff5d6c'; }
   if (addedSet.has(n.id)) { borderColor = '#ffb347'; }
   const size = risk ? 12 + Math.min(risk.overallRisk / 4, 18) : 10;
+  const wfId = nodeToWorkflow[n.id];
+  const wfName = wfId ? (WF_DOMAINS.find(d => d.id === wfId) || {}).name : null;
   return {
     id: n.id,
     label: n.label,
-    title: n.id + (risk ? '\\nRisk: ' + risk.overallRisk.toFixed(1) : ''),
+    title: n.id + (wfName ? '\\nWorkflow: ' + wfName : '') + (risk ? '\\nRisk: ' + risk.overallRisk.toFixed(1) : ''),
     color: { background: color, border: borderColor, highlight: { background: color, border: '#fff' } },
     size: size,
     font: { color: '#e6e8ec', size: 11 },
     borderWidth: borderColor === color ? 1 : 3,
-    shape: 'dot'
+    shape: 'dot',
+    _wf: wfId
   };
 });
 const edgeTypeColor = { 'INVOKES': '#5b8def', 'DEPENDS_ON': '#3a3f4a', 'MUTATES': '#ff5d6c', 'SYNCHRONIZES': '#ffb347' };
@@ -419,15 +543,241 @@ const visEdges = (PAYLOAD.graph.edges || []).map((e, i) => ({
   color: { color: edgeTypeColor[e.type] || '#3a3f4a', opacity: 0.5 },
   width: e.type === 'INVOKES' ? 1.5 : 1
 }));
+const networkNodeDataSet = new vis.DataSet(visNodes);
+const networkEdgeDataSet = new vis.DataSet(visEdges);
 const network = new vis.Network(
   document.getElementById('graph'),
-  { nodes: new vis.DataSet(visNodes), edges: new vis.DataSet(visEdges) },
+  { nodes: networkNodeDataSet, edges: networkEdgeDataSet },
   {
     physics: { stabilization: { iterations: 120 }, barnesHut: { gravitationalConstant: -8000, springLength: 120 } },
     interaction: { hover: true, tooltipDelay: 100 },
     layout: { improvedLayout: true }
   }
 );
+
+// Render workflow hero cards
+function renderWorkflows() {
+  const grid = document.getElementById('workflowGrid');
+  if (!grid) return;
+  if (WORKFLOWS.length === 0) { grid.innerHTML = '<div class="explain">No workflows classified.</div>'; return; }
+  grid.innerHTML = WORKFLOWS.map(w => {
+    const riskCls = w.maxRisk >= 50 ? 'risk-high' : w.maxRisk >= 30 ? 'risk-med' : w.impactedCount > 0 ? 'risk-low' : 'untouched';
+    const active = activeWorkflowFilter === w.workflowId ? ' style="outline: 2px solid var(--accent); outline-offset: 2px;"' : '';
+    const signals = (WF_DOMAINS.find(d => d.id === w.workflowId) || {}).signals || [];
+    const sigStr = signals.slice(0, 6).map(s => s.source + ':' + s.value).join(' • ');
+    const runtimeRisksHtml = w.runtimeRisks && w.runtimeRisks.length > 0
+      ? '<ul class="risks-list">' + w.runtimeRisks.slice(0, 3).map(r => '<li>' + esc(r) + '</li>').join('') + '</ul>'
+      : '';
+    return '<div class="workflow-card ' + riskCls + '" data-wf="' + w.workflowId + '"' + active + '>' +
+      '<h3>' + esc(w.workflowName) + '</h3>' +
+      '<div class="narr">' + esc(w.narrative) + '</div>' +
+      '<div class="meta-row">' +
+        '<span>' + w.memberCount + ' nodes</span>' +
+        '<span style="color:var(--warn)">' + w.impactedCount + ' impacted</span>' +
+        '<span style="margin-left:auto" class="risk-num" title="Max risk">' + (w.maxRisk || 0).toFixed(0) + '</span>' +
+      '</div>' +
+      runtimeRisksHtml +
+      (sigStr ? '<div class="signals" title="Inference signals">' + esc(sigStr) + '</div>' : '') +
+    '</div>';
+  }).join('');
+  grid.querySelectorAll('.workflow-card').forEach(card => {
+    card.addEventListener('click', () => {
+      const wf = card.dataset.wf;
+      activeWorkflowFilter = (activeWorkflowFilter === wf) ? null : wf;
+      applyWorkflowFilter();
+      renderWorkflows();
+    });
+  });
+}
+
+function applyWorkflowFilter() {
+  const label = document.getElementById('graphFilterLabel');
+  if (activeWorkflowFilter) {
+    const wf = WORKFLOWS.find(w => w.workflowId === activeWorkflowFilter);
+    label.textContent = '— filtered to: ' + (wf ? wf.workflowName : activeWorkflowFilter);
+    // hide non-matching nodes in graph
+    networkNodeDataSet.forEach(n => {
+      networkNodeDataSet.update({ id: n.id, hidden: n._wf !== activeWorkflowFilter });
+    });
+  } else {
+    label.textContent = '';
+    networkNodeDataSet.forEach(n => networkNodeDataSet.update({ id: n.id, hidden: false }));
+  }
+  // Propagate to risk + target tables
+  if (typeof renderRisks === 'function') renderRisks();
+  if (typeof renderTargets === 'function') renderTargets();
+}
+renderWorkflows();
+
+// Confidence Heatmap
+function renderHeatmap() {
+  const el = document.getElementById('heatmap'); if (!el) return;
+  if (WORKFLOWS.length === 0) { el.innerHTML = '<div class="explain">No workflows.</div>'; return; }
+  el.innerHTML = WORKFLOWS.map(w => {
+    const risk = w.maxRisk || 0;
+    const r = Math.min(255, Math.round(80 + (risk / 100) * 175));
+    const g = Math.max(60, Math.round(220 - (risk / 100) * 160));
+    const b = Math.max(60, Math.round(150 - (risk / 100) * 90));
+    const bg = 'rgb(' + r + ',' + g + ',' + b + ')';
+    return '<div class="heatcell" data-wf="' + w.workflowId + '" style="background:' + bg + '" title="' + esc(w.narrative) + '">' +
+      '<div class="lbl">' + esc(w.workflowName) + '</div>' +
+      '<div class="v">' + (w.maxRisk || 0).toFixed(0) + '</div>' +
+    '</div>';
+  }).join('');
+  el.querySelectorAll('.heatcell').forEach(c => {
+    c.addEventListener('click', () => {
+      const wf = c.dataset.wf;
+      activeWorkflowFilter = (activeWorkflowFilter === wf) ? null : wf;
+      applyWorkflowFilter();
+      renderWorkflows();
+    });
+  });
+}
+renderHeatmap();
+
+// Confidence trend
+function renderTrend() {
+  const svg = document.getElementById('trendChart'); if (!svg) return;
+  const trend = (PAYLOAD.confidenceTrend || []).slice().reverse(); // oldest -> newest
+  const note = document.getElementById('trendNote');
+  if (trend.length < 2) {
+    svg.innerHTML = '<text x="10" y="60" fill="#9aa3b2" font-size="12">Need more than one run to chart. Run again to see the trend.</text>';
+    note.textContent = trend.length === 1 ? '1 run on record.' : 'No history yet.';
+    return;
+  }
+  const W = 400, H = 120, pad = 8;
+  const step = (W - pad * 2) / (trend.length - 1);
+  const points = trend.map((r, i) => {
+    const x = pad + i * step;
+    const y = H - pad - (r.overallConfidence / 100) * (H - pad * 2);
+    return x + ',' + y;
+  }).join(' ');
+  const last = trend[trend.length - 1].overallConfidence;
+  const first = trend[0].overallConfidence;
+  svg.innerHTML =
+    '<polyline points="' + points + '" fill="none" stroke="#4f8cff" stroke-width="2"/>' +
+    '<line x1="0" y1="' + (H - pad) + '" x2="' + W + '" y2="' + (H - pad) + '" stroke="#2a2f3a"/>';
+  note.textContent = 'Trend over ' + trend.length + ' runs — last ' + last.toFixed(1) + ', first ' + first.toFixed(1) + ' (delta ' + (last - first).toFixed(1) + ').';
+}
+renderTrend();
+
+// Drift
+function renderDrift() {
+  const summary = document.getElementById('driftSummary');
+  const list = document.getElementById('driftList');
+  const drift = PAYLOAD.drift;
+  if (!drift || !drift.workflows || drift.workflows.length === 0) {
+    summary.textContent = 'No drift data yet (first run on record).';
+    list.innerHTML = '';
+    return;
+  }
+  summary.textContent = drift.summary;
+  list.innerHTML = drift.workflows.map(d => {
+    const cls = d.oscillationDetected ? 'oscillating' :
+                (d.changedSinceLastRun && d.memberChange === 0) ? 'silent' :
+                d.changedSinceLastRun ? 'changed' : '';
+    return '<div class="drift-item ' + cls + '">' + esc(d.narrative) + '</div>';
+  }).join('');
+}
+renderDrift();
+
+// Adversarial probes
+function renderProbes() {
+  const list = document.getElementById('probeList');
+  const probes = PAYLOAD.probes || [];
+  const filter = (document.getElementById('probeFilter').value || '').toLowerCase();
+  const sev = document.getElementById('probeSeverity').value;
+  const filtered = probes.filter(p =>
+    (p.nodeId.toLowerCase().includes(filter) || (p.workflowKind || '').toLowerCase().includes(filter)) &&
+    (!sev || p.severity === sev) &&
+    (!activeWorkflowFilter || p.workflowId === activeWorkflowFilter)
+  );
+  list.innerHTML = filtered.map((p, i) => {
+    return '<div class="probe-item severity-' + p.severity + '">' +
+      '<div><span class="cat">' + p.category + '</span><span class="cat">' + p.severity + '</span>' +
+      '<span style="font-family:monospace;font-size:11px;color:var(--muted)">' + esc(shortId(p.nodeId)) + '</span>' +
+      (p.workflowKind ? ' <span class="cat">' + esc(p.workflowKind) + '</span>' : '') +
+      '<button class="copy-btn" data-i="' + i + '" style="float:right">Copy</button></div>' +
+      '<div class="scen">' + esc(p.scenario) + '</div>' +
+      '<div class="inv">Expected invariant: ' + esc(p.expectedInvariant) + '</div>' +
+    '</div>';
+  }).join('') || '<div class="explain">No probes match.</div>';
+  list.querySelectorAll('.copy-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const p = filtered[parseInt(btn.dataset.i, 10)];
+      const prompt = 'Veris adversarial probe [' + p.severity + ' / ' + p.category + '] for ' + p.nodeId + ':\\n' +
+                     'Scenario: ' + p.scenario + '\\n' +
+                     'Expected invariant: ' + p.expectedInvariant + '\\n\\n' +
+                     'Please design and execute a test that exercises this scenario, then report whether the invariant holds.';
+      copyToClipboard(prompt, btn);
+    });
+  });
+}
+document.getElementById('probeFilter').addEventListener('input', renderProbes);
+document.getElementById('probeSeverity').addEventListener('change', renderProbes);
+document.getElementById('copyAllProbes').addEventListener('click', () => {
+  const probes = PAYLOAD.probes || [];
+  const filter = (document.getElementById('probeFilter').value || '').toLowerCase();
+  const sev = document.getElementById('probeSeverity').value;
+  const filtered = probes.filter(p =>
+    (p.nodeId.toLowerCase().includes(filter) || (p.workflowKind || '').toLowerCase().includes(filter)) &&
+    (!sev || p.severity === sev) &&
+    (!activeWorkflowFilter || p.workflowId === activeWorkflowFilter)
+  );
+  const prompt = 'Veris adversarial probe batch (' + filtered.length + '):\\n\\n' +
+    filtered.map((p, i) => (i+1) + '. [' + p.severity + '/' + p.category + '] ' + p.nodeId + '\\n   Scenario: ' + p.scenario + '\\n   Invariant: ' + p.expectedInvariant).join('\\n\\n') +
+    '\\n\\nPlease design tests for each and report which invariants hold.';
+  copyToClipboard(prompt, document.getElementById('copyAllProbes'));
+});
+renderProbes();
+
+// Budget allocator (recomputed client-side using payload data for live what-if)
+const TIER_LEVERAGE = { 'Tier 1': 1, 'Tier 2': 3, 'Tier 3': 7 };
+const TIER_COST = { 'Tier 1': 5, 'Tier 2': 30, 'Tier 3': 120 };
+const WF_CRIT = { 'Payments': 2.0,'Authentication': 2.0,'Authorization': 1.8,'Webhooks': 1.8,'Billing': 1.7,'Checkout': 1.7,'Session': 1.6,'Persistence': 1.5,'Queue': 1.5,'Sync': 1.4,'Orchestration': 1.4,'Realtime': 1.3,'Caching': 1.2,'Notifications': 1.1,'AI': 1.5,'Routing': 1.4,'Cart': 1.2,'Search': 1.0,'Profile': 0.9,'Admin': 1.2,'Analytics': 0.8,'Onboarding': 1.0,'Reporting': 0.7,'Configuration': 0.7,'Infrastructure': 0.8,'Core': 1.0,'Uncategorized': 0.7 };
+function renderBudget() {
+  const minutes = parseInt(document.getElementById('budgetInput').value, 10) || 15;
+  const budgetSec = minutes * 60;
+  const targets = (PAYLOAD.plan.targets || []).slice();
+  const riskByNode = {}; (PAYLOAD.risks || []).forEach(r => { riskByNode[r.nodeId] = r.score.overallRisk; });
+  const wfByNode = {}; (WF_DOMAINS || []).forEach(d => { (d.memberNodeIds||[]).forEach(id => { wfByNode[id] = d; }); });
+  const scored = targets.map(t => {
+    const tierKey = t.tier.split(' - ')[0];
+    const tier = TIER_LEVERAGE[tierKey] || 1;
+    const cost = TIER_COST[tierKey] || 5;
+    const risk = riskByNode[t.nodeId] || 10;
+    const wf = wfByNode[t.nodeId];
+    const crit = wf ? (WF_CRIT[wf.kind] || 1) : 1;
+    return { ...t, _score: (tier * crit * (risk / 10)) / cost, _cost: cost, _wf: wf ? wf.name : '' };
+  }).sort((a,b) => b._score - a._score);
+  const selected = []; let used = 0;
+  for (const t of scored) { if (used + t._cost <= budgetSec) { selected.push(t); used += t._cost; } }
+  document.getElementById('budgetNarrative').textContent =
+    'Selected ' + selected.length + ' of ' + targets.length + ' targets, estimated ' + Math.round(used/60) + '/' + minutes + ' min.';
+  document.getElementById('budgetList').innerHTML = selected.slice(0, 200).map(t => {
+    const tierKey = t.tier.split(' - ')[0];
+    const cls = tierKey === 'Tier 1' ? 't1' : tierKey === 'Tier 2' ? 't2' : 't3';
+    return '<div class="budget-row">' +
+      '<span class="badge-tier ' + cls + '">' + tierKey + '</span>' +
+      '<span style="font-family:monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(t.nodeId) + '">' + esc(shortId(t.nodeId)) + '</span>' +
+      '<span style="color:var(--muted)">' + (t._wf || '-') + '</span>' +
+      '<span style="text-align:right;color:var(--muted)">' + t._cost + 's</span>' +
+    '</div>';
+  }).join('');
+}
+document.getElementById('recomputeBudget').addEventListener('click', renderBudget);
+document.getElementById('budgetInput').addEventListener('change', renderBudget);
+document.getElementById('copyBudgetPrompt').addEventListener('click', () => {
+  const minutes = parseInt(document.getElementById('budgetInput').value, 10) || 15;
+  const list = document.querySelectorAll('#budgetList .budget-row');
+  const lines = [];
+  list.forEach((row, i) => lines.push((i+1) + '. ' + row.children[1].textContent));
+  const prompt = 'Veris ' + minutes + '-minute verification plan (highest-leverage subset):\\n\\n' + lines.join('\\n') +
+    '\\n\\nPlease execute these in order, then report which passed and which failed via mcp__veris__report_execution.';
+  copyToClipboard(prompt, document.getElementById('copyBudgetPrompt'));
+});
+renderBudget();
 
 // Risk table
 function renderRisks() {
@@ -439,7 +789,10 @@ function renderRisks() {
     frag: (a,b) => b.score.dependencyFragility - a.score.dependencyFragility,
     crit: (a,b) => b.score.runtimeCriticality - a.score.runtimeCriticality
   };
-  const filtered = (PAYLOAD.risks || []).filter(r => r.nodeId.toLowerCase().includes(filter)).sort(sorters[sortBy]);
+  const filtered = (PAYLOAD.risks || []).filter(r =>
+    r.nodeId.toLowerCase().includes(filter) &&
+    (!activeWorkflowFilter || nodeToWorkflow[r.nodeId] === activeWorkflowFilter)
+  ).sort(sorters[sortBy]);
   const body = document.getElementById('riskBody');
   body.innerHTML = filtered.map(r => {
     const cls = r.score.overallRisk >= 50 ? 'high' : r.score.overallRisk >= 30 ? 'med' : 'low';
@@ -463,7 +816,8 @@ function renderTargets() {
   const filtered = (PAYLOAD.plan.targets || []).filter(t =>
     t.nodeId.toLowerCase().includes(filter) &&
     (!tier || t.tier.startsWith(tier)) &&
-    (!pri || t.priority === pri)
+    (!pri || t.priority === pri) &&
+    (!activeWorkflowFilter || nodeToWorkflow[t.nodeId] === activeWorkflowFilter)
   );
   const list = document.getElementById('targetList');
   list.innerHTML = filtered.map((t, i) => {
@@ -505,7 +859,8 @@ document.getElementById('copyAll').addEventListener('click', () => {
   const filtered = (PAYLOAD.plan.targets || []).filter(t =>
     t.nodeId.toLowerCase().includes(filter) &&
     (!tier || t.tier.startsWith(tier)) &&
-    (!pri || t.priority === pri)
+    (!pri || t.priority === pri) &&
+    (!activeWorkflowFilter || nodeToWorkflow[t.nodeId] === activeWorkflowFilter)
   );
   const prompt = 'Veris verification batch (' + filtered.length + ' directives):\\n\\n' +
     filtered.map((t,i) => (i+1) + '. [' + t.tier + ' / ' + t.priority + '] ' + t.nodeId + '\\n   -> ' + t.directive).join('\\n\\n') +

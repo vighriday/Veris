@@ -2,6 +2,56 @@
 
 All notable changes to Veris (Behavioral Verification Infrastructure) will be documented in this file.
 
+## [2.0.0] - 2026-05-18 — "Intelligence Layer"
+
+### Added — engines
+
+- **VerisState (SQLite layer)** at `.veris/state.db`. Persistent run history, executions, fingerprints, node risk history, learned signals. WAL journal mode. `VERIS_STATE_DISABLED=1` to skip writes entirely (zero-retention).
+- **Confidence half-life decay**: `ConfidenceEngine` consumes real `executions` history with exponential decay (default 14-day half-life). Failed executions actively reduce confidence; flaky executions count for half-credit. Tier-weighted (T3 buys 4× the confidence of T1).
+- **Workflow fingerprinting**: `WorkflowFingerprintEngine` produces SHA-256 fingerprints of each workflow's member set + internal edge topology.
+- **Drift detector**: `DriftDetector` compares current fingerprints to history. Detects silent rewrites (same members, different topology), surface expansion/contraction, and oscillating refactors.
+- **Counterfactual mode**: `CounterfactualEngine.whatIfRevert(nodeIds)` simulates removing nodes from head graph and recomputes diff + risk. Returns delta + avoided risks + narrative.
+- **Adversarial probe generator**: `AdversarialProbeGenerator` emits concrete Tier 3 hypotheses per workflow kind — idempotency, retry storms, replay attacks, cache stampede, partial failure, ordering, auth edges, malformed state, concurrency. Each probe has a scenario + expected invariant.
+- **Verification budget allocator**: `VerificationBudgetAllocator` greedy knapsack on (tier × workflow criticality × risk) / cost. Picks highest-leverage subset of targets within a time budget.
+- **Onboarding exporter**: `OnboardingExporter` writes a workflow-first markdown map under `veris-reports/onboarding/` — one file per workflow with members, internal topology, runtime risks, and a "where to start reading" fan-in hub.
+- **Cross-repo registry**: `CrossRepoRegistry` at `~/.veris/registry.json`. Register repos by name; query latest run + confidence across the fleet.
+- **Plugin loader**: `.veris/plugins/*.js` modules export `register(api)` to add workflow rules, runtime risks, risk heuristics, and language adapters. `VERIS_PLUGINS_DISABLED=1` to skip.
+
+### Added — MCP tools (10 new, 17 total)
+
+- `list_workflows`, `analyze_workflow` (v1.2 already), plus:
+- `detect_drift`, `generate_adversarial_probes`, `allocate_budget`, `what_if_revert`, `report_execution`, `confidence_history`, `node_history`, `export_onboarding`, `cross_repo_snapshot`, `register_repo`.
+
+### Added — dashboard
+
+- **Confidence Heatmap** — workflow cells colored by max risk; click to filter.
+- **Confidence Over Time** — SVG sparkline of confidence trend across runs.
+- **Behavioral Drift card** — narrative-driven; flags silent rewrites + oscillation.
+- **Adversarial Probes card** — filterable by node/severity. Click-to-copy individual probe prompts; "Copy ALL filtered probes" batch button.
+- **Verification Budget card** — live what-if: change the minute budget, the allocator recomputes the selected subset client-side and lets you copy the plan as a prompt.
+
+### Added — CLI
+
+- `veris init` scaffolds `.veris/` with `plugins/`, `config.json`, sample disabled plugin.
+- `veris help` prints usage.
+- `--budget=<minutes>` flag drives the budget allocator card.
+- `--onboarding` flag writes the onboarding map.
+
+### Added — OSS files
+
+- `LICENSE` (MIT).
+- `CONTRIBUTING.md`.
+- `docs/PLUGINS.md` — plugin guide with API reference + examples.
+- `docs/MCP_TOOLS.md` — MCP tool reference + recommended flows.
+- `examples/plugin-fintech.js` — vertical reinforcement plugin sample.
+
+### Changed
+
+- `RepositoryIntelligenceEngine` honors plugin language adapters (interface in place; built-ins still TS/JS).
+- `ConfidenceEngine.calculateConfidence` gains `opts: { state, halfLifeDays, nodeWorkflowMap }`; old signature still works.
+- Dashboard payload extended (`drift`, `fingerprints`, `probes`, `budget`, `confidenceTrend`, `pluginsLoaded`, `runId`).
+- Package bumped to `2.0.0`. MCP server `version` field bumped to `1.2.0` (kept in sync with workflow features).
+
 ## [1.2.0] - 2026-05-18
 
 ### Changed

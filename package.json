@@ -1,6 +1,6 @@
 {
   "name": "veris-core",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "description": "Veris — Behavioral Verification Infrastructure",
   "main": "dist/index.js",
   "bin": {
@@ -17,9 +17,11 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-sqlite3": "^12.10.0",
     "ts-morph": "^21.0.1"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.11.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3"
