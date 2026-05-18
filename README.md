@@ -14,6 +14,8 @@
 
 Veris is the verification intelligence layer that sits between AI coding agents and production reliability. It does **not** run your tests. It tells any MCP-compatible coding agent or CI pipeline **what behaviors are at risk, what to verify, and how confident the result actually is** — backed by a behavioral graph, semantic workflow grouping, persistent run history, drift detection, and explainable confidence math.
 
+**Today: TypeScript + JavaScript repos. Python and Go adapters on the [roadmap](ROADMAP.md).**
+
 Works with any MCP client. CLI works standalone. Fully open source. Local-first. No cloud. No telemetry. No paid tier.
 
 ---

@@ -3,7 +3,7 @@
   "name": "veris",
   "displayName": "Veris",
   "version": "2.1.8",
-  "description": "Behavioral Verification Infrastructure — MCP-native verification intelligence layer. 17 tools for workflow grouping, drift detection, counterfactual reasoning, adversarial probe generation, and confidence modeling.",
+  "description": "Behavioral Verification Infrastructure — MCP-native verification intelligence layer for TypeScript and JavaScript repos (Python and Go adapters on the roadmap). 17 tools for workflow grouping, drift detection, counterfactual reasoning, adversarial probe generation, and confidence modeling.",
   "license": "MIT",
   "homepage": "https://github.com/vighriday/Veris",
   "author": { "name": "vighriday", "url": "https://github.com/vighriday" },
