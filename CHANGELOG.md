@@ -2,6 +2,14 @@
 
 All notable changes to Veris (Behavioral Verification Infrastructure) will be documented in this file.
 
+## [2.1.8] - 2026-05-19 — "skills.sh"
+
+### Added
+
+- **skills.sh / vercel-labs/skills integration**: `skills/veris/SKILL.md` so any agent can install Veris via `npx skills add vighriday/Veris`.
+- `skills/` directory included in npm tarball.
+- `server.json` included in npm tarball (for MCP Registry consumers).
+
 ## [2.1.7] - 2026-05-19 — "MCP Registry"
 
 ### Added
