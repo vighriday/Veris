@@ -2,6 +2,14 @@
 
 All notable changes to Veris (Behavioral Verification Infrastructure) will be documented in this file.
 
+## [2.1.7] - 2026-05-19 — "MCP Registry"
+
+### Added
+
+- **MCP Registry metadata**: `mcpName` field in `package.json` (`io.github.vighriday/veris`) + top-level `server.json` so Veris can be published to the official Model Context Protocol Registry at https://registry.modelcontextprotocol.io.
+
+No code changes — pure registry metadata.
+
 ## [2.1.6] - 2026-05-18 — "OSS shakedown"
 
 Ran Veris against Prisma (3,696 nodes), NestJS (3,712 nodes), and Strapi (6,982 nodes). Three real bugs surfaced. All fixed.
