@@ -62,13 +62,34 @@ export function loadPlugins(projectRoot: string): PluginPayload {
     const dir = path.join(projectRoot, '.veris', 'plugins');
     if (!fs.existsSync(dir)) return payload;
 
+    const isStringArray = (v: any) => Array.isArray(v) && v.every(x => typeof x === 'string');
     const api: PluginApi = {
-        addWorkflowRule: (rule) => payload.extraWorkflowRules.push(rule),
+        addWorkflowRule: (rule) => {
+            if (!rule || typeof rule.kind !== 'string' || !rule.kind.trim()) {
+                console.error('[veris-plugin] addWorkflowRule: missing or invalid kind, skipped');
+                return;
+            }
+            if (rule.pathTokens && !isStringArray(rule.pathTokens)) { console.error('[veris-plugin] invalid pathTokens'); return; }
+            if (rule.importTokens && !isStringArray(rule.importTokens)) { console.error('[veris-plugin] invalid importTokens'); return; }
+            if (rule.symbolTokens && !isStringArray(rule.symbolTokens)) { console.error('[veris-plugin] invalid symbolTokens'); return; }
+            payload.extraWorkflowRules.push(rule);
+        },
         addRuntimeRisks: (kind, risks) => {
+            if (typeof kind !== 'string' || !kind.trim()) { console.error('[veris-plugin] addRuntimeRisks: invalid kind'); return; }
+            if (!isStringArray(risks)) { console.error('[veris-plugin] addRuntimeRisks: risks must be string[]'); return; }
             payload.extraRuntimeRisks[kind] = (payload.extraRuntimeRisks[kind] || []).concat(risks);
         },
-        addRiskHeuristic: (fn) => payload.riskHeuristics.push(fn),
-        addLanguageAdapter: (a) => payload.languageAdapters.push(a),
+        addRiskHeuristic: (fn) => {
+            if (typeof fn !== 'function') { console.error('[veris-plugin] addRiskHeuristic: fn must be function'); return; }
+            payload.riskHeuristics.push(fn);
+        },
+        addLanguageAdapter: (a) => {
+            if (!a || typeof a.name !== 'string' || !isStringArray(a.extensions) || typeof a.analyze !== 'function') {
+                console.error('[veris-plugin] addLanguageAdapter: invalid adapter shape');
+                return;
+            }
+            payload.languageAdapters.push(a);
+        },
         log: (msg) => console.error('[veris-plugin]', msg)
     };
 

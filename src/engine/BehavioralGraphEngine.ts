@@ -1,11 +1,16 @@
-import { RepositoryIntelligenceReport } from '../models/EntityModels';
+import { RepositoryIntelligenceReport, VerisFile } from '../models/EntityModels';
 import { BehavioralGraph, NodeType, EdgeType } from '../models/GraphModels';
 
 /**
- * Phase 2: Semantic Understanding & Behavioral Graph Engine
- * Builds nodes from classes/methods/functions and emits:
- *  - DependsOn edges from imports (file-level coupling)
- *  - Invokes edges from CallExpression name matches (method/function callees)
+ * Behavioral Graph Engine.
+ *
+ * Nodes: classes, methods, functions.
+ * Edges:
+ *   - DependsOn: file-level coupling from `import`/`require()` chains.
+ *   - Invokes:   resolved from CallExpression names against a callable index.
+ *
+ * Perf: file lookup by basename is O(1) via Map (previously O(N) per import,
+ * which exploded to O(N²) on monorepos with thousands of files).
  */
 export class BehavioralGraphEngine {
 
@@ -19,6 +24,19 @@ export class BehavioralGraphEngine {
             list.push(nodeId);
             calleeIndex.set(name, list);
         };
+
+        // Index files by basename (without extension) and by lowercased basename
+        // for fast cross-file resolution of imports.
+        const fileByBaseName: Map<string, VerisFile[]> = new Map();
+        for (const f of report.files) {
+            const segs = f.filePath.split(/[\\\/]/);
+            const last = segs[segs.length - 1] || '';
+            const base = last.replace(/\.(ts|tsx|js|jsx|mjs|cjs)$/i, '').toLowerCase();
+            if (!base) continue;
+            const list = fileByBaseName.get(base) || [];
+            list.push(f);
+            fileByBaseName.set(base, list);
+        }
 
         // 1. Nodes
         report.files.forEach(file => {
@@ -41,7 +59,18 @@ export class BehavioralGraphEngine {
             });
         });
 
-        // 2. DependsOn edges via imports (file-level coupling)
+        // 2. DependsOn edges via imports (file-level coupling, basename-indexed).
+        // Heuristic: only count edges for imports that look like relative paths
+        // (starts with '.', '..', '/', or '~/') OR a TS path-alias-shaped specifier.
+        // Bare package imports like 'fs', 'express', 'lodash' don't create graph edges.
+        const isLocalImportSpec = (imp: string): boolean => {
+            if (!imp) return false;
+            if (imp.startsWith('.') || imp.startsWith('/') || imp.startsWith('~/')) return true;
+            // TS path aliases (Next.js, NestJS): @/foo, ~/foo, $foo/bar etc. — let basename win.
+            if (imp.startsWith('@/') || imp.startsWith('$/')) return true;
+            return false;
+        };
+
         report.files.forEach(file => {
             const imports = report.dependencyMap[file.filePath];
             if (!imports) return;
@@ -49,15 +78,21 @@ export class BehavioralGraphEngine {
             file.classes.forEach(sourceCls => {
                 const sourceId = `${file.filePath}::${sourceCls.name}`;
                 imports.forEach(imp => {
-                    const baseImpName = imp.split('/').pop() || imp;
-                    const targetFile = report.files.find(f =>
-                        f.filePath.endsWith(`${baseImpName}.ts`) || f.filePath.endsWith(`${baseImpName}.js`)
-                    );
-                    if (targetFile) {
-                        targetFile.classes.forEach(targetCls => {
+                    if (!isLocalImportSpec(imp)) return;
+                    const baseImpName = (imp.split('/').pop() || imp).toLowerCase();
+                    if (!baseImpName) return;
+                    const targetFiles = fileByBaseName.get(baseImpName);
+                    if (!targetFiles) return;
+                    // Cap basename collisions: if more than 5 files share a basename,
+                    // skip — almost certainly a generic name (e.g. 'index', 'utils')
+                    // that would just create noise edges.
+                    if (targetFiles.length > 5) return;
+                    for (const targetFile of targetFiles) {
+                        if (targetFile.filePath === file.filePath) continue;
+                        for (const targetCls of targetFile.classes) {
                             const targetId = `${targetFile.filePath}::${targetCls.name}`;
                             graph.addEdge({ sourceId, targetId, type: EdgeType.DependsOn });
-                        });
+                        }
                     }
                 });
             });

@@ -18,7 +18,10 @@ export interface ReportMeta {
     generatedAt?: string;
 }
 
+export const DASHBOARD_PAYLOAD_SCHEMA_VERSION = '1.1.0';
+
 export interface DashboardPayload {
+    schemaVersion?: string;
     meta: ReportMeta;
     graph: { nodes: GraphNode[]; edges: GraphEdge[] };
     diff: DiffReport;
@@ -115,7 +118,8 @@ export class ReportingEngine {
      */
     public generateDashboard(payload: DashboardPayload): string {
         const htmlPath = path.join(this.outputDir, 'veris-dashboard.html');
-        const html = renderDashboard(payload);
+        const stamped: DashboardPayload = { schemaVersion: DASHBOARD_PAYLOAD_SCHEMA_VERSION, ...payload };
+        const html = renderDashboard(stamped);
         fs.writeFileSync(htmlPath, html, 'utf8');
         return htmlPath;
     }

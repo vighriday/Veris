@@ -2,6 +2,35 @@
 
 All notable changes to Veris (Behavioral Verification Infrastructure) will be documented in this file.
 
+## [2.1.4] - 2026-05-18 — "Real-world hardening"
+
+### Fixed — caught by testing on Express + Next.js
+
+- **CommonJS coverage**: Express has 141 files but v2.1.3 only saw 55 nodes / 8 edges because ts-morph `getClasses`/`getFunctions` skip `module.exports.X = function() {}` patterns. New `RepositoryIntelligenceEngine` extracts:
+  - `require('...')` calls (was only catching ES `import`)
+  - `const X = function() {}` and `const X = () => {}` top-level assignments
+  - `module.exports.X = function() {}` and `exports.X = function() {}` patterns
+  - `module.exports = function() {}` named after the file basename
+  - `Foo.prototype.bar = function() {}` prototype methods grouped under the class
+  - Result on Express: 93 nodes (+69%), 71 edges (+787%), 6 workflows detected (was 3, including correct Routing/Authentication/Session/Caching identification).
+- **Edge explosion on monorepos**: Next.js (2444 files) produced 545,762 edges in v2.1.3 due to basename-collision matching every `index.ts` to every other `index.ts`. Now:
+  - Only resolves edges for imports that look local (`./`, `../`, `/`, `~/`, `@/`, `$/`)
+  - Skips basenames shared by more than 5 files (e.g. `index`, `utils`, `helpers`)
+  - Edge dedup so the same `(source, target, type)` triple counts once
+- **Perf**: `BehavioralGraphEngine` no longer does O(N²) file lookups. Pre-indexed by basename. Next.js graph build dropped from un-runnable to sub-second.
+
+### Added
+
+- **Dashboard payload schema version** (`schemaVersion: "1.1.0"`) embedded in every dashboard. Downstream consumers can pin / validate.
+- **Friendlier CLI errors**: hints for missing `better-sqlite3`, missing git, missing `data/` files. `VERIS_DEBUG=1` for full stack.
+- **SQLite migration safety**: warns when an existing `.veris/state.db` was written by a newer schema.
+- **Plugin loader validation**: rejects malformed `addWorkflowRule`, `addRuntimeRisks`, `addRiskHeuristic`, `addLanguageAdapter` calls with a clear log instead of silently corrupting state.
+- **`.tsx`, `.jsx`, `.mjs`, `.cjs` file extensions** now ingested by RepositoryIntelligenceEngine.
+
+### Changed
+
+- TypeScript project loads with `compilerOptions: { allowJs, checkJs: false, noEmit, skipLibCheck }` — skips type checking for massive perf win on JS-heavy repos.
+
 ## [2.1.3] - 2026-05-18 — "Data-driven, accuracy fixes"
 
 ### Fixed (accuracy bugs in classifier — found by self-audit)

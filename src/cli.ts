@@ -30,7 +30,7 @@ interface CliArgs {
     command: 'analyze' | 'init' | 'help' | 'doctor' | 'schema' | 'mcp' | 'version';
 }
 
-const VERIS_VERSION = '2.1.3';
+const VERIS_VERSION = '2.1.4';
 
 function parseArgs(argv: string[]): CliArgs {
     const args = argv.slice(2);
@@ -353,7 +353,24 @@ async function analyzeOnce(args: CliArgs) {
         }
 
     } catch (e) {
-        console.error("Veris CLI Error:", e);
+        const err = e as Error;
+        console.error("\nVeris CLI Error.");
+        console.error("Message:", err.message);
+        if (err.message && err.message.includes('better-sqlite3')) {
+            console.error("\nHint: native module 'better-sqlite3' failed to load. Try:");
+            console.error("  npm rebuild better-sqlite3");
+            console.error("  Or run with VERIS_STATE_DISABLED=1 to skip persistence.");
+        } else if (err.message && err.message.toLowerCase().includes('git')) {
+            console.error("\nHint: git operation failed. Veris falls back to synthetic diff if git is unavailable.");
+            console.error("  Check `git status` works in this directory, or pass --base-ref=HEAD~1.");
+        } else if (err.message && err.message.includes('data/')) {
+            console.error("\nHint: missing default data files. Try `npm rebuild` or reinstall veris-core.");
+        }
+        if (process.env.VERIS_DEBUG === '1') {
+            console.error("\nStack:", err.stack);
+        } else {
+            console.error("\nRun with VERIS_DEBUG=1 for full stack trace.");
+        }
         process.exit(1);
     }
 }

@@ -35,6 +35,7 @@ export interface GraphEdge {
 export class BehavioralGraph {
     private nodes: Map<string, GraphNode> = new Map();
     private edges: GraphEdge[] = [];
+    private edgeKeys: Set<string> = new Set();
 
     public addNode(node: GraphNode): void {
         if (!this.nodes.has(node.id)) {
@@ -42,7 +43,15 @@ export class BehavioralGraph {
         }
     }
 
+    /**
+     * Dedup edges so the same (source, target, type) triple is recorded once.
+     * This is critical for large monorepos where the same import resolves to
+     * many basename-matched files; without dedup the edge count explodes.
+     */
     public addEdge(edge: GraphEdge): void {
+        const key = `${edge.sourceId}${edge.targetId}${edge.type}`;
+        if (this.edgeKeys.has(key)) return;
+        this.edgeKeys.add(key);
         this.edges.push(edge);
     }
 

@@ -139,7 +139,17 @@ export class VerisState {
         const row = this.db.prepare('SELECT version FROM schema_version LIMIT 1').get() as any;
         if (!row) {
             this.db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(SCHEMA_VERSION);
+            return;
         }
+        const existing = row.version as number;
+        if (existing > SCHEMA_VERSION) {
+            console.error(`[veris-state] WARNING: state.db schema version ${existing} is newer than this build (${SCHEMA_VERSION}). ` +
+                          `Some columns may be missing. Consider upgrading veris-core, or remove .veris/state.db to reset.`);
+        }
+        // Future migrations run here when SCHEMA_VERSION is bumped:
+        //   if (existing < 2) { ... }
+        //   if (existing < 3) { ... }
+        //   this.db.prepare('UPDATE schema_version SET version = ?').run(SCHEMA_VERSION);
     }
 
     public close(): void {
