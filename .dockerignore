@@ -1,0 +1,15 @@
+node_modules
+dist
+.veris
+veris-reports
+test-init
+test-state
+test-project
+examples/demo-app/.veris
+examples/demo-app/veris-reports
+examples/runs/node_modules
+.github
+.claude
+.vscode
+*.log
+*.tgz
