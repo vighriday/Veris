@@ -2,6 +2,51 @@
 
 All notable changes to Veris (Behavioral Verification Infrastructure) will be documented in this file.
 
+## [2.1.6] - 2026-05-18 — "OSS shakedown"
+
+Ran Veris against Prisma (3,696 nodes), NestJS (3,712 nodes), and Strapi (6,982 nodes). Three real bugs surfaced. All fixed.
+
+### Fixed
+
+- **Windows MAX_PATH crash**: on large repos (Prisma) with deeply nested paths, `git worktree add` aborts because file paths exceed 260 chars. Veris was bubbling the failure as a fatal CLI error. Now catches the error, prunes the partial worktree, and falls back to synthetic diff with a clear log line.
+- **AI classifier false positives**: path tokens `prompt`/`agent`/`ai` and symbol tokens `prompt`/`chat`/`tool` were too broad. They caught Prisma's CLI prompt scaffolding (`prompt/utils/`, `promptTemplateSelection`) and NestJS's GraphQL chat sample apps. Tightened to `llm`/`rag`/`embedding`/`completion` path tokens and `completion`/`embed` symbol tokens. Removed `ts-morph` from import tokens (Veris was self-classifying as AI).
+- **Test/sample/fixture deweight**: code under `__tests__/`, `tests/`, `samples/`, `examples/`, `fixtures/`, `e2e/`, `benchmarks/`, or files matching `*.test.ts` / `*.spec.ts` now contribute 30% signal weight instead of 100%. Real `src/auth/login.ts` always outranks `tests/auth.spec.ts` when scoring. Scoped to relevant path segments (after the source anchor) so a project rooted at `examples/demo-app/` is not deweighted as a whole.
+
+### Verified
+
+| Repo | Nodes | Edges | Workflows | Probes | Notes |
+|------|-------|-------|-----------|--------|-------|
+| Prisma | 3,696 | 25,046 | 13 | 21 | Persistence dominant (correct — ORM). AI false positives: 12 → 0. |
+| NestJS | 3,712 | 31,890 | 14 | 21 | Routing dominant (correct — router framework). AI false positives: 2 → 0. |
+| Strapi | 6,982 | 40,027 | 21 | 25 | Admin dominant (correct — CMS). 22 → 21 workflows after AI false-positive removal. |
+| demo-app | 37 | 16 | 11 | 18 | No regression — all 11 planted workflows still classify correctly. |
+
+## [2.1.5] - 2026-05-18 — "Demo-app shakedown"
+
+A self-contained demo app (`examples/demo-app/`) with planted bugs across 11 workflows surfaced six real Veris defects. All fixed in this release.
+
+### Fixed
+
+- **GitDiffDriver subpath leakage**: when `projectRoot` is a subdir of a larger git repo, the base-ref worktree analysis crawled the entire parent tree, so risk/probe output was contaminated with unrelated nodes. Base analysis is now scoped to the same relative subpath as `projectRoot`.
+- **BehavioralDiffEngine added stale nodes** to `impactedNodes` by falling back to `oldNodesMap.get(...)` for removed-edge sources. Deleted-module tombstones leaked into risk scoring. Now strictly head-graph only.
+- **Isolated added nodes** (a brand-new file whose only imports are external packages) were dropped from `impactedNodes` because no graph edge touched them. Every added node is now impacted by definition.
+- **AdversarialProbeGenerator emitted per-node**, so three Auth nodes meant three duplicate copies of each Auth probe — while Caching, AI, Notifications, etc. got zero probes because no member crossed the risk threshold. Refactored to emit a deduped probe deck per workflow anchored to the workflow's highest-risk member.
+- **Classifier camelCase blind spot**: `matchesSymbol` used a strict regex word-boundary, so `issueSession` did not match symbolToken `session`. Now splits camelCase into components first.
+- **Path-token weight vs import-token weight**: a file in `payments/` that imports `ioredis` was tied between Payments and Caching. Path-token match strength is now tiered (exact segment = strongest, prefix = medium, scoped = weakest) and exact segment outranks any import-token.
+
+### Added
+
+- **`examples/demo-app/`**: self-contained synthetic TS/JS app with 17 planted bugs across Authentication, Session, Payments, Checkout, Webhooks, Caching, Queue, Persistence, Routing, AI, Notifications. `GROUND_TRUTH.md` lists every planted issue and the probe Veris must fire to catch it.
+- **`examples/runs/demo-app-snapshot.md`**: writeup of the run, the ground-truth diff, and the six Veris bugs this exercise surfaced.
+
+### Verified
+
+Running `npx veris-core examples/demo-app` now flags all 11 expected workflows, generates 18 probes covering every workflow kind, and produces zero false-scope leakage from the parent Veris repo.
+
+### Fixed (dashboard)
+
+- Generated-at timestamp rendered as hardcoded `UTC` regardless of viewer's machine. Now uses `Intl.DateTimeFormat` with viewer's local timezone; hover tooltip shows source UTC for reference.
+
 ## [2.1.4] - 2026-05-18 — "Real-world hardening"
 
 ### Fixed — caught by testing on Express + Next.js

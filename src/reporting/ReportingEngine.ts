@@ -532,7 +532,26 @@ document.getElementById('metaLine').textContent =
   (m.baseRef ? ' • base: ' + m.baseRef : '') +
   (m.headRef ? ' • head: ' + m.headRef.substring(0,7) : '') +
   (m.projectRoot ? ' • ' + m.projectRoot : '');
-document.getElementById('genTime').textContent = (m.generatedAt || '').replace('T',' ').replace(/\..+/,'') + ' UTC';
+(function renderGenTime(){
+  const raw = m.generatedAt || '';
+  const el = document.getElementById('genTime');
+  if (!raw) { el.textContent = ''; return; }
+  const d = new Date(raw);
+  if (isNaN(d.getTime())) { el.textContent = raw.replace('T',' ').replace(/\\..+/,''); return; }
+  // Use viewer's machine locale + tz. Falls back to UTC if Intl unavailable.
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local';
+    const fmt = new Intl.DateTimeFormat(undefined, {
+      year: 'numeric', month: 'short', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      timeZoneName: 'short'
+    });
+    el.textContent = fmt.format(d);
+    el.title = 'Source (UTC): ' + raw + ' • Timezone: ' + tz;
+  } catch {
+    el.textContent = d.toISOString().replace('T',' ').replace(/\\..+/,'') + ' UTC';
+  }
+})();
 
 // Executive summary narrative
 (function buildHero(){

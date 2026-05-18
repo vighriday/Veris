@@ -29,32 +29,45 @@ export class AdversarialProbeGenerator {
         risks: RiskReport[],
         workflows: WorkflowDomain[],
         graphNodes: GraphNode[],
-        opts: { maxPerNode?: number; minRiskThreshold?: number } = {}
+        opts: { maxPerWorkflow?: number; minRiskThreshold?: number } = {}
     ): AdversarialProbe[] {
-        const max = opts.maxPerNode ?? 3;
-        const threshold = opts.minRiskThreshold ?? 40;
+        const maxPerWorkflow = opts.maxPerWorkflow ?? 3;
+        // Workflow gets its probe deck if any member node has risk above this floor.
+        // Floor is intentionally low — probes are directives ("here is what could
+        // break"), not findings. The point is coverage, not noise control.
+        const floor = opts.minRiskThreshold ?? 10;
         const probesData = loadProbes(this.projectRoot);
 
-        const nodeToWorkflow = new Map<string, WorkflowDomain>();
-        for (const d of workflows) for (const id of d.memberNodeIds) nodeToWorkflow.set(id, d);
-
         const nodesById = new Map(graphNodes.map(n => [n.id, n]));
-        const high = risks
-            .filter(r => r.score.overallRisk >= threshold)
-            .sort((a, b) => b.score.overallRisk - a.score.overallRisk);
+        const riskById = new Map(risks.map(r => [r.nodeId, r]));
 
         const probes: AdversarialProbe[] = [];
-        for (const r of high) {
-            const node = nodesById.get(r.nodeId);
-            if (!node) continue;
-            const wf = nodeToWorkflow.get(r.nodeId);
-            const templates: ProbeTemplate[] = (wf && probesData.probesByKind[wf.kind])
-                || probesData.generic;
-            for (const p of templates.slice(0, max)) {
+        const seen = new Set<string>();
+
+        for (const wf of workflows) {
+            // Highest-risk member of the workflow becomes the anchor node for the probe.
+            // If no member is in scope, skip — workflow is unaffected by this run.
+            let anchor: { nodeId: string; risk: number } | null = null;
+            for (const id of wf.memberNodeIds) {
+                const r = riskById.get(id);
+                if (!r) continue;
+                if (!anchor || r.score.overallRisk > anchor.risk) {
+                    anchor = { nodeId: id, risk: r.score.overallRisk };
+                }
+            }
+            if (!anchor || anchor.risk < floor) continue;
+            if (!nodesById.has(anchor.nodeId)) continue;
+
+            const templates: ProbeTemplate[] = probesData.probesByKind[wf.kind] || probesData.generic;
+            for (const p of templates.slice(0, maxPerWorkflow)) {
+                // Dedup on (workflowKind, scenario) so a workflow never duplicates a probe.
+                const key = `${wf.kind}|${p.scenario}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
                 probes.push({
-                    nodeId: r.nodeId,
-                    workflowId: wf?.id,
-                    workflowKind: wf?.kind,
+                    nodeId: anchor.nodeId,
+                    workflowId: wf.id,
+                    workflowKind: wf.kind,
                     category: p.category,
                     scenario: p.scenario,
                     expectedInvariant: p.expectedInvariant,

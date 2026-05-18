@@ -110,9 +110,9 @@
     },
     {
       "kind": "AI",
-      "pathTokens": ["ai", "llm", "agent", "prompt", "embedding", "rag"],
-      "importTokens": ["openai", "@anthropic-ai/", "langchain", "llamaindex", "pinecone", "@modelcontextprotocol/sdk", "ts-morph"],
-      "symbolTokens": ["prompt", "completion", "embed", "chat", "tool"]
+      "pathTokens": ["llm", "rag", "embedding", "completion"],
+      "importTokens": ["openai", "@anthropic-ai/", "langchain", "llamaindex", "pinecone", "@modelcontextprotocol/sdk"],
+      "symbolTokens": ["completion", "embed"]
     },
     {
       "kind": "Routing",

@@ -67,6 +67,15 @@ export class GitDiffDriver {
         }
     }
 
+    private gitRoot(): string | null {
+        try {
+            return execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: this.projectRoot })
+                .toString().trim();
+        } catch {
+            return null;
+        }
+    }
+
     public snapshot(baseRef?: string): GitDiffSnapshots | null {
         if (!this.isGitRepo()) return null;
 
@@ -80,21 +89,69 @@ export class GitDiffDriver {
         const graphEngine = new BehavioralGraphEngine();
         const headGraph = graphEngine.buildGraphFromReport(headReport);
 
+        // Scope base analysis to the same subpath the user pointed at. Without this,
+        // running `veris .` inside a subfolder of a larger repo pulls every node from
+        // the parent tree into the diff and contaminates risk/probe output.
+        const rootAbs = this.gitRoot();
+        const projAbs = path.resolve(this.projectRoot);
+        const subPath = rootAbs ? path.relative(rootAbs, projAbs) : '';
+
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'veris-worktree-'));
         let baseGraph: BehavioralGraph;
+        let worktreeCreated = false;
         try {
-            execFileSync('git', ['worktree', 'add', '--detach', tmpDir, resolvedBase], { cwd: this.projectRoot, stdio: 'pipe' });
-            const baseIntel = new RepositoryIntelligenceEngine(tmpDir);
-            const baseReport = baseIntel.analyze();
-            baseReport.files.forEach(f => {
-                f.filePath = f.filePath.replace(tmpDir.replace(/\\/g, '/'), this.projectRoot.replace(/\\/g, '/'));
-            });
-            baseGraph = graphEngine.buildGraphFromReport(baseReport);
-        } finally {
+            // worktree is rooted at the git toplevel; analyze the matching subpath.
+            // On Windows, large repos with deeply nested paths can exceed MAX_PATH
+            // (260 chars) during checkout — git aborts and we bail to synthetic
+            // diff rather than crash the run.
             try {
-                execFileSync('git', ['worktree', 'remove', '--force', tmpDir], { cwd: this.projectRoot, stdio: 'pipe' });
-            } catch {
-                // best-effort cleanup
+                execFileSync('git', ['worktree', 'add', '--detach', tmpDir, resolvedBase], {
+                    cwd: this.projectRoot,
+                    stdio: 'pipe'
+                });
+                worktreeCreated = true;
+            } catch (err) {
+                const msg = (err as Error).message || '';
+                if (/Filename too long|MAX_PATH|unable to create file/i.test(msg)) {
+                    console.error('[veris] git worktree failed (likely Windows MAX_PATH). Falling back to synthetic diff.');
+                } else {
+                    console.error('[veris] git worktree failed:', msg.split('\n')[0]);
+                    console.error('[veris] Falling back to synthetic diff.');
+                }
+                return null;
+            }
+
+            const baseAnalysisRoot = subPath ? path.join(tmpDir, subPath) : tmpDir;
+            const baseExists = fs.existsSync(baseAnalysisRoot);
+            if (subPath && !baseExists) {
+                // Subfolder didn't exist at the base ref → there is nothing to diff
+                // against. Return an empty base graph so head is treated as entirely
+                // new. Falling back to analyzing the parent tree contaminates risk
+                // and produces a fake "-155 removed" against unrelated nodes.
+                baseGraph = new BehavioralGraph();
+            } else {
+                const baseIntel = new RepositoryIntelligenceEngine(baseAnalysisRoot);
+                const baseReport = baseIntel.analyze();
+                const fromPrefix = baseAnalysisRoot.replace(/\\/g, '/');
+                const toPrefix = this.projectRoot.replace(/\\/g, '/');
+                baseReport.files.forEach(f => {
+                    f.filePath = f.filePath.replace(fromPrefix, toPrefix);
+                });
+                baseGraph = graphEngine.buildGraphFromReport(baseReport);
+            }
+        } finally {
+            if (worktreeCreated) {
+                try {
+                    execFileSync('git', ['worktree', 'remove', '--force', tmpDir], { cwd: this.projectRoot, stdio: 'pipe' });
+                } catch {
+                    // best-effort cleanup
+                }
+            } else {
+                // git aborted mid-checkout — partial worktree may exist on disk. Prune.
+                try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+                try {
+                    execFileSync('git', ['worktree', 'prune'], { cwd: this.projectRoot, stdio: 'pipe' });
+                } catch { /* ignore */ }
             }
         }
 

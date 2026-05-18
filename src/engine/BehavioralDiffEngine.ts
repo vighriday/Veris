@@ -25,10 +25,16 @@ export class BehavioralDiffEngine {
         const addedEdges = newGraph.getEdges().filter(e => !oldEdges.includes(`${e.sourceId}->${e.targetId}`));
         const removedEdges = oldGraph.getEdges().filter(e => !newEdges.includes(`${e.sourceId}->${e.targetId}`));
 
-        // Impacted workflows/nodes (Blast Radius basis)
-        // If a node was removed or added, any node depending on it / interacting with it is impacted.
-        // For simplicity, any new node impacts its immediate connections.
-        const impactedNodesSet: Set<GraphNode> = new Set();
+        // Impacted nodes for risk scoring:
+        //   1. Every added node — even if it has no edges (isolated new file still
+        //      ships behavior that needs verification).
+        //   2. Every node touched by an added or removed edge.
+        //   3. Only nodes that exist in the *current* head graph qualify — old
+        //      tombstones leak risk into output (e.g., when projectRoot is a
+        //      subfolder of a larger repo, the parent tree's removed nodes
+        //      shouldn't show up).
+        const impactedNodesSet: Set<GraphNode> = new Set(addedNodes);
+
         addedEdges.forEach(e => {
             const target = newNodesMap.get(e.targetId);
             const source = newNodesMap.get(e.sourceId);
@@ -37,8 +43,10 @@ export class BehavioralDiffEngine {
         });
 
         removedEdges.forEach(e => {
-            const source = newNodesMap.get(e.sourceId) || oldNodesMap.get(e.sourceId);
+            const source = newNodesMap.get(e.sourceId);
             if (source) impactedNodesSet.add(source);
+            const target = newNodesMap.get(e.targetId);
+            if (target) impactedNodesSet.add(target);
         });
 
         return {

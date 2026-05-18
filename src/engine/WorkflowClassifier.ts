@@ -74,32 +74,66 @@ export class WorkflowClassifier {
             const segmentBareSet = new Set([...segmentSet].map(s => s.replace(/\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs)$/i, '')));
             const fileImportsLower = (file.imports || []).map(i => i.toLowerCase());
 
-            const matchesPathToken = (tok: string): boolean => {
-                if (segmentSet.has(tok) || segmentBareSet.has(tok)) return true;
+            // Deweight test/sample/example/fixture code. These dirs naturally contain
+            // tokens like "payment", "order", "auth" because they exercise real code,
+            // but they are not the workflow itself — they are test harness. Signal
+            // strength reduced to 30% so a real `src/auth/login.ts` always outranks
+            // `__tests__/auth.test.ts` in scoring.
+            //
+            // Match only against the segments *after* the source anchor (relevantSegments).
+            // If the user pointed Veris at a directory named "examples/demo-app", every
+            // file would deweight by 0.3, which is wrong — that's the project root,
+            // not test code inside it.
+            const testishSegments = new Set([
+                '__tests__', '__test__', 'tests', 'test', 'spec', 'specs',
+                'sample', 'samples', 'example', 'examples', 'fixture', 'fixtures',
+                'e2e', 'integration-tests', '__mocks__', '__fixtures__', 'benchmarks',
+                'benchmark', 'bench'
+            ]);
+            const isTestish = relevantSegments.some(s => testishSegments.has(s))
+                || /\.(test|spec)\.[a-z]+$/.test(filePathLower);
+            const contextMultiplier = isTestish ? 0.3 : 1;
+
+            // Returns match strength:
+            //   'exact'  — path token is a literal directory segment (auth/, payments/) → strongest.
+            //   'prefix' — segment starts with the token + ≤4 chars (auth → authn).
+            //   'scoped' — scoped token like "app/api" found in joined path.
+            // Returning null = no match.
+            const matchesPathToken = (tok: string): 'exact' | 'prefix' | 'scoped' | null => {
+                if (segmentSet.has(tok) || segmentBareSet.has(tok)) return 'exact';
                 for (const seg of segmentBareSet) {
                     if (seg.startsWith(tok) && seg.length > tok.length) {
                         const rest = seg.slice(tok.length);
-                        if (rest.length <= 4 && /^[a-z]+$/.test(rest)) return true;
+                        if (rest.length <= 4 && /^[a-z]+$/.test(rest)) return 'prefix';
                     }
                 }
                 if (tok.includes('/')) {
                     const scoped = relevantSegments.join('/');
-                    return scoped.includes(tok);
+                    if (scoped.includes(tok)) return 'scoped';
                 }
-                return false;
+                return null;
             };
 
+            // Weighting rationale: a directory-segment match is the strongest possible
+            // signal about which workflow a file belongs to — `src/payments/charge.ts`
+            // is Payments regardless of which libs it imports. Imports come second
+            // because they identify the *capability* (e.g., `import ioredis` shows
+            // caching infra) but a file can use redis for sessions, rate-limiting,
+            // queues, etc. Symbol-name votes are last because they are noisy
+            // (`PaymentReconciler` lives in `src/index.js`, but the file is wiring,
+            // not the Payments workflow).
             const fileSignals: { kind: string; signal: WorkflowSignal }[] = [];
             for (const rule of allRules) {
                 const weight = rule.weight ?? 1;
                 for (const tok of rule.pathTokens || []) {
-                    if (matchesPathToken(tok)) {
-                        fileSignals.push({ kind: rule.kind, signal: { source: 'path', value: tok, weight: weight * 2 } });
-                    }
+                    const m = matchesPathToken(tok);
+                    if (!m) continue;
+                    const pathWeight = m === 'exact' ? 6 : m === 'prefix' ? 3 : 2;
+                    fileSignals.push({ kind: rule.kind, signal: { source: 'path', value: tok, weight: weight * pathWeight * contextMultiplier } });
                 }
                 for (const tok of rule.importTokens || []) {
                     if (fileImportsLower.some(imp => imp.includes(tok))) {
-                        fileSignals.push({ kind: rule.kind, signal: { source: 'import', value: tok, weight: weight * 3 } });
+                        fileSignals.push({ kind: rule.kind, signal: { source: 'import', value: tok, weight: weight * 3 * contextMultiplier } });
                     }
                 }
             }
@@ -107,8 +141,17 @@ export class WorkflowClassifier {
             const matchesSymbol = (name: string, tok: string): boolean => {
                 const lower = name.toLowerCase();
                 if (lower === tok) return true;
-                const re = new RegExp('(^|[^a-z0-9])' + tok.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '($|[^a-z0-9])', 'i');
-                return re.test(name);
+                // Word-boundary first (e.g., process_payment, processPayment2).
+                const reBoundary = new RegExp('(^|[^a-z0-9])' + tok.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '($|[^a-z0-9])', 'i');
+                if (reBoundary.test(name)) return true;
+                // CamelCase boundary: split by case transitions and try again.
+                // `issueSession` → ["issue","session"], so token `session` matches as a whole component.
+                const camelParts = name
+                    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+                    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+                    .toLowerCase()
+                    .split(/[\s_]+/);
+                return camelParts.includes(tok);
             };
             const symbolVotes: { symbolKey: string; kind: string; signal: WorkflowSignal }[] = [];
             const checkSymbol = (name: string, symbolKey: string) => {
@@ -116,7 +159,7 @@ export class WorkflowClassifier {
                     const weight = rule.weight ?? 1;
                     for (const tok of rule.symbolTokens || []) {
                         if (matchesSymbol(name, tok)) {
-                            symbolVotes.push({ symbolKey, kind: rule.kind, signal: { source: 'symbol', value: tok, weight } });
+                            symbolVotes.push({ symbolKey, kind: rule.kind, signal: { source: 'symbol', value: tok, weight: weight * contextMultiplier } });
                         }
                     }
                 }
