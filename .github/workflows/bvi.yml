@@ -1,0 +1,36 @@
+name: Behavioral Verification Infrastructure (BVI)
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+
+jobs:
+  bvi-analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0 # Need full history for behavioral diffs
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Project
+        run: npm run build
+
+      - name: Run BVI CLI
+        run: npx ts-node src/cli.ts ./
+
+      - name: Upload BVI Reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: bvi-reports
+          path: bvi-reports/
