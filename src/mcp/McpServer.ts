@@ -8,10 +8,11 @@ import { BehavioralDiffEngine } from '../engine/BehavioralDiffEngine';
 import { RiskModelingEngine } from '../engine/RiskModelingEngine';
 import { VerificationPlanningEngine } from '../engine/VerificationPlanningEngine';
 import { ConfidenceEngine } from '../engine/ConfidenceEngine';
+import { GitDiffDriver } from '../engine/GitDiffDriver';
 import { BehavioralGraph } from '../models/GraphModels';
 import * as path from 'path';
 
-export class BviMcpServer {
+export class VerisMcpServer {
     private server: Server;
     private projectRoot: string;
 
@@ -24,7 +25,7 @@ export class BviMcpServer {
     constructor() {
         this.server = new Server(
             {
-                name: "bvi-mcp-server",
+                name: "veris-mcp-server",
                 version: "1.0.0",
             },
             {
@@ -56,8 +57,14 @@ export class BviMcpServer {
                 },
                 {
                     name: "analyze_pr_behavior",
-                    description: "Computes a semantic diff between states and returns impacted workflows and risk scores.",
-                    inputSchema: { type: "object", properties: {}, required: [] }
+                    description: "Computes a semantic diff between git refs (real diff via worktree) and returns impacted workflows and risk scores. Falls back to synthetic diff if not a git repo.",
+                    inputSchema: {
+                        type: "object",
+                        properties: {
+                            baseRef: { type: "string", description: "Optional git base ref. Defaults: origin/main, main, HEAD~1." }
+                        },
+                        required: []
+                    }
                 },
                 {
                     name: "generate_verification_plan",
@@ -106,25 +113,51 @@ export class BviMcpServer {
                 }
 
                 case "analyze_pr_behavior": {
-                    if (!this.currentGraph) {
-                        throw new Error("Graph not exported yet. Run export_behavioral_graph first.");
+                    const args = (request.params.arguments || {}) as any;
+                    const baseRefHint: string | undefined = args.baseRef;
+
+                    const driver = new GitDiffDriver(this.projectRoot);
+                    const snap = driver.snapshot(baseRefHint);
+
+                    let oldGraph: BehavioralGraph;
+                    let newGraph: BehavioralGraph;
+                    let mode = 'git';
+                    let refs: any = {};
+
+                    if (snap) {
+                        oldGraph = snap.baseGraph;
+                        newGraph = snap.headGraph;
+                        this.currentGraph = newGraph;
+                        refs = { baseRef: snap.baseRef, headRef: snap.headRef };
+                    } else {
+                        if (!this.currentGraph) {
+                            const engine = new RepositoryIntelligenceEngine(this.projectRoot);
+                            this.lastReport = engine.analyze();
+                            const ge = new BehavioralGraphEngine();
+                            this.currentGraph = ge.buildGraphFromReport(this.lastReport);
+                        }
+                        oldGraph = new BehavioralGraph();
+                        this.currentGraph.getNodes().slice(0, Math.floor(this.currentGraph.getNodes().length * 0.7)).forEach(n => oldGraph.addNode(n));
+                        this.currentGraph.getEdges().slice(0, Math.floor(this.currentGraph.getEdges().length * 0.7)).forEach(e => oldGraph.addEdge(e));
+                        newGraph = this.currentGraph;
+                        mode = 'synthetic';
                     }
-                    // Simulating an AI generated PR / older state diff dynamically
-                    const oldGraph = new BehavioralGraph();
-                    this.currentGraph.getNodes().slice(0, Math.floor(this.currentGraph.getNodes().length * 0.7)).forEach(n => oldGraph.addNode(n));
-                    this.currentGraph.getEdges().slice(0, Math.floor(this.currentGraph.getEdges().length * 0.7)).forEach(e => oldGraph.addEdge(e));
 
                     const diffEngine = new BehavioralDiffEngine();
-                    const diffReport = diffEngine.computeDiff(oldGraph, this.currentGraph);
+                    const diffReport = diffEngine.computeDiff(oldGraph, newGraph);
                     const riskEngine = new RiskModelingEngine();
-                    
-                    this.lastRiskReports = riskEngine.assessRisk(diffReport, this.currentGraph);
+                    this.lastRiskReports = riskEngine.assessRisk(diffReport, newGraph);
+
                     return {
                         content: [{
                             type: "text",
                             text: JSON.stringify({
+                                diffMode: mode,
+                                ...refs,
+                                addedNodes: diffReport.addedNodes.length,
+                                removedNodes: diffReport.removedNodes.length,
                                 impactedNodes: diffReport.impactedNodes.length,
-                                riskReports: this.lastRiskReports.slice(0, 3) // Return top 3 for brevity
+                                riskReports: this.lastRiskReports.slice(0, 3)
                             }, null, 2)
                         }]
                     };
@@ -163,6 +196,6 @@ export class BviMcpServer {
     async run() {
         const transport = new StdioServerTransport();
         await this.server.connect(transport);
-        console.error("BVI MCP Server running on stdio");
+        console.error("Veris MCP Server running on stdio");
     }
 }

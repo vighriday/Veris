@@ -1,0 +1,39 @@
+name: Veris - Behavioral Verification Infrastructure
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+
+jobs:
+  veris-analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Need full history for behavioral diffs
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Project
+        run: npm run build
+
+      - name: Run Veris CLI (with git diff vs base)
+        run: node dist/cli.js ./ --base-ref=origin/${{ github.base_ref }}
+        env:
+          VERIS_CONFIDENCE_THRESHOLD: ${{ vars.VERIS_CONFIDENCE_THRESHOLD || '0' }}
+
+      - name: Upload Veris Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: veris-reports
+          path: veris-reports/

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import * as path from 'path';
+import * as fs from 'fs';
 import { RepositoryIntelligenceEngine } from './engine/RepositoryIntelligenceEngine';
 import { BehavioralGraphEngine } from './engine/BehavioralGraphEngine';
 import { BehavioralDiffEngine } from './engine/BehavioralDiffEngine';
@@ -7,35 +8,68 @@ import { RiskModelingEngine } from './engine/RiskModelingEngine';
 import { VerificationPlanningEngine } from './engine/VerificationPlanningEngine';
 import { ConfidenceEngine } from './engine/ConfidenceEngine';
 import { ReportingEngine } from './reporting/ReportingEngine';
+import { GitDiffDriver } from './engine/GitDiffDriver';
+import { BehavioralGraph } from './models/GraphModels';
+
+interface CliArgs {
+    targetDir: string;
+    baseRef?: string;
+}
+
+function parseArgs(argv: string[]): CliArgs {
+    const args = argv.slice(2);
+    let targetDir = process.cwd();
+    let baseRef: string | undefined;
+    for (const a of args) {
+        if (a.startsWith('--base-ref=')) baseRef = a.split('=')[1];
+        else if (a.startsWith('--')) continue;
+        else targetDir = path.resolve(a);
+    }
+    return { targetDir, baseRef };
+}
 
 async function runCli() {
     console.log("==================================================");
-    console.log("BVI CLI - Behavioral Verification Infrastructure");
+    console.log("Veris CLI - Behavioral Verification Infrastructure");
     console.log("==================================================");
 
-    const args = process.argv.slice(2);
-    const targetDir = args[0] ? path.resolve(args[0]) : process.cwd();
-
-    console.log(`Target Directory: ${targetDir}\n`);
+    const { targetDir, baseRef } = parseArgs(process.argv);
+    console.log(`Target Directory: ${targetDir}`);
+    if (baseRef) console.log(`Base Ref Hint: ${baseRef}`);
+    console.log();
 
     try {
-        // Phase 1
-        console.log("-> Running Intelligence Engine...");
-        const intelEngine = new RepositoryIntelligenceEngine(targetDir);
-        const report = intelEngine.analyze();
+        // Try real git-diff path first
+        const gitDriver = new GitDiffDriver(targetDir);
+        let baseGraph: BehavioralGraph;
+        let headGraph: BehavioralGraph;
+        let diffMode = 'synthetic';
+        const snap = gitDriver.snapshot(baseRef);
 
-        // Phase 2
-        console.log("-> Generating Behavioral Graph...");
-        const graphEngine = new BehavioralGraphEngine();
-        const baseGraph = graphEngine.buildGraphFromReport(report);
+        if (snap) {
+            console.log(`-> Git diff mode: ${snap.baseRef} -> ${snap.headRef}`);
+            baseGraph = snap.baseGraph;
+            headGraph = snap.headGraph;
+            diffMode = 'git';
+        } else {
+            console.log("-> Git diff unavailable. Falling back to synthetic 70% slice.");
+            const intel = new RepositoryIntelligenceEngine(targetDir);
+            const report = intel.analyze();
+            const ge = new BehavioralGraphEngine();
+            headGraph = ge.buildGraphFromReport(report);
+            baseGraph = new BehavioralGraph();
+            headGraph.getNodes().slice(0, Math.floor(headGraph.getNodes().length * 0.7)).forEach(n => baseGraph.addNode(n));
+            headGraph.getEdges().slice(0, Math.floor(headGraph.getEdges().length * 0.7)).forEach(e => baseGraph.addEdge(e));
+        }
+
+        console.log(`-> Graph: ${headGraph.getNodes().length} nodes, ${headGraph.getEdges().length} edges (head)`);
 
         // Phase 3
         console.log("-> Calculating Risk Models...");
         const diffEngine = new BehavioralDiffEngine();
-        // Simulating a diff by using the same graph for PoC
-        const diffReport = diffEngine.computeDiff(baseGraph, baseGraph);
+        const diffReport = diffEngine.computeDiff(baseGraph, headGraph);
         const riskEngine = new RiskModelingEngine();
-        const riskReports = riskEngine.assessRisk(diffReport, baseGraph);
+        const riskReports = riskEngine.assessRisk(diffReport, headGraph);
 
         // Phase 4 & 5
         console.log("-> Planning Verification...");
@@ -44,24 +78,42 @@ async function runCli() {
 
         console.log("-> Assessing Confidence...");
         const confidenceEngine = new ConfidenceEngine();
-        // Simulating that nothing has been executed yet
         const confidence = confidenceEngine.calculateConfidence(riskReports, plan, 0);
 
         // Phase 6
         console.log("-> Generating Reports...");
         const reportingEngine = new ReportingEngine(targetDir);
-        const mdPath = reportingEngine.generateMarkdownReport(diffReport, riskReports, plan, confidence);
-        
-        const fs = require('fs');
-        const mdContent = fs.readFileSync(mdPath, 'utf8');
-        const htmlPath = reportingEngine.generateHtmlReport(mdContent);
+        const meta = {
+            diffMode,
+            baseRef: snap?.baseRef,
+            headRef: snap?.headRef,
+            projectRoot: targetDir,
+            generatedAt: new Date().toISOString()
+        };
+        const mdPath = reportingEngine.generateMarkdownReport(diffReport, riskReports, plan, confidence, meta);
+        const dashboardPath = reportingEngine.generateDashboard({
+            meta,
+            graph: { nodes: headGraph.getNodes(), edges: headGraph.getEdges() },
+            diff: diffReport,
+            risks: riskReports,
+            plan,
+            confidence
+        });
 
-        console.log(`\nSuccess! Reports generated at:`);
-        console.log(`- ${mdPath}`);
-        console.log(`- ${htmlPath}`);
-        
+        console.log(`\nDiff Mode: ${diffMode}`);
+        console.log(`Reports generated:`);
+        console.log(`- Markdown: ${mdPath}`);
+        console.log(`- Interactive dashboard: ${dashboardPath}`);
+
+        // Exit non-zero if confidence below threshold (CI gating hook)
+        const threshold = Number(process.env.VERIS_CONFIDENCE_THRESHOLD || '0');
+        if (threshold > 0 && confidence.overallConfidence < threshold) {
+            console.error(`\nVeris gate failed: confidence ${confidence.overallConfidence} < threshold ${threshold}`);
+            process.exit(2);
+        }
+
     } catch (e) {
-        console.error("BVI CLI Error:", e);
+        console.error("Veris CLI Error:", e);
         process.exit(1);
     }
 }

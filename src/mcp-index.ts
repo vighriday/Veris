@@ -1,4 +1,4 @@
-import { BviMcpServer } from './mcp/McpServer';
+import { VerisMcpServer } from './mcp/McpServer';
 
-const server = new BviMcpServer();
+const server = new VerisMcpServer();
 server.run().catch(console.error);

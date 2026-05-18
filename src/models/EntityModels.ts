@@ -1,22 +1,23 @@
-export interface BVIFile {
+export interface VerisFile {
     filePath: string;
-    classes: BVIClass[];
-    functions: BVIFunction[];
-    imports: string[]; // Paths or modules imported
+    classes: VerisClass[];
+    functions: VerisFunction[];
+    imports: string[];
 }
 
-export interface BVIClass {
+export interface VerisClass {
     name: string;
-    methods: BVIFunction[];
+    methods: VerisFunction[];
 }
 
-export interface BVIFunction {
+export interface VerisFunction {
     name: string;
     isExported: boolean;
+    calls?: string[];
 }
 
 export interface RepositoryIntelligenceReport {
     projectPath: string;
-    files: BVIFile[];
-    dependencyMap: Record<string, string[]>; // Map of file to files/modules it imports
+    files: VerisFile[];
+    dependencyMap: Record<string, string[]>;
 }

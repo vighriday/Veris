@@ -1,4 +1,4 @@
-import { BVIFile, RepositoryIntelligenceReport } from "./EntityModels";
+import { RepositoryIntelligenceReport } from "./EntityModels";
 
 export interface LanguageAdapter {
     name: string;

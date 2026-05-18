@@ -10,7 +10,7 @@ import * as path from 'path';
 
 async function main() {
     console.log("==================================================");
-    console.log("BVI Phase 1: Repository Intelligence Engine");
+    console.log("Veris Phase 1: Repository Intelligence Engine");
     console.log("==================================================\n");
 
     const projectRoot = path.resolve(__dirname, '../');
@@ -22,7 +22,7 @@ async function main() {
     console.log(`Number of files analyzed: ${report.files.length}\n`);
 
     console.log("==================================================");
-    console.log("BVI Phase 2: Semantic Understanding & Graph");
+    console.log("Veris Phase 2: Semantic Understanding & Graph");
     console.log("==================================================\n");
 
     const graphEngine = new BehavioralGraphEngine();
@@ -38,7 +38,7 @@ async function main() {
     currentGraph.getEdges().slice(0, Math.floor(currentGraph.getEdges().length * 0.7)).forEach(e => oldGraph.addEdge(e));
 
     console.log("==================================================");
-    console.log("BVI Phase 3: Behavioral Diff & Risk Modeling");
+    console.log("Veris Phase 3: Behavioral Diff & Risk Modeling");
     console.log("==================================================\n");
 
     const diffEngine = new BehavioralDiffEngine();
@@ -62,7 +62,7 @@ async function main() {
     });
 
     console.log("==================================================");
-    console.log("BVI Phase 4: Verification Planning & Confidence Engine");
+    console.log("Veris Phase 4: Verification Planning & Confidence Engine");
     console.log("==================================================\n");
 
     const verificationPlanner = new VerificationPlanningEngine();
@@ -87,7 +87,7 @@ async function main() {
 
     console.log(`\nConfidence Assessment:`);
     console.log(`  Extrapolated Execution Depth: ${confidence.executionDepth}%`);
-    console.log(`  Overall BVI Confidence Score: ${confidence.overallConfidence}/100\n`);
+    console.log(`  Overall Veris Confidence Score: ${confidence.overallConfidence}/100\n`);
     console.log(`  Confidence Explainability:`);
     confidence.explanation.forEach(exp => console.log(`    - ${exp}`));
     if (confidence.unverifiedAssumptions.length > 0) {
@@ -96,20 +96,25 @@ async function main() {
     }
 
     console.log("==================================================");
-    console.log("BVI Phase 6: Reporting and Dashboard");
+    console.log("Veris Phase 6: Reporting and Dashboard");
     console.log("==================================================\n");
 
     const reportingEngine = new ReportingEngine(projectRoot);
-    const mdPath = reportingEngine.generateMarkdownReport(diffReport, riskReports, plan, confidence);
+    const meta = { diffMode: 'synthetic', projectRoot, generatedAt: new Date().toISOString() };
+    const mdPath = reportingEngine.generateMarkdownReport(diffReport, riskReports, plan, confidence, meta);
     console.log(`Markdown Report generated at: ${mdPath}`);
-    
-    // Read the MD to convert to HTML
-    const fs = require('fs');
-    const mdContent = fs.readFileSync(mdPath, 'utf8');
-    const htmlPath = reportingEngine.generateHtmlReport(mdContent);
-    console.log(`HTML Dashboard generated at: ${htmlPath}`);
 
-    console.log("\nEnd of BVI Pipeline run.");}
+    const dashboardPath = reportingEngine.generateDashboard({
+        meta,
+        graph: { nodes: currentGraph.getNodes(), edges: currentGraph.getEdges() },
+        diff: diffReport,
+        risks: riskReports,
+        plan,
+        confidence
+    });
+    console.log(`Interactive Dashboard generated at: ${dashboardPath}`);
+
+    console.log("\nEnd of Veris Pipeline run.");}
 
 main().catch(err => {
     console.error("Failed to run Repository Intelligence Engine", err);

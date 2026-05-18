@@ -1,5 +1,3 @@
-import { BVIFile, BVIClass, BVIFunction } from './EntityModels';
-
 /**
  * Nodes in the Behavioral Graph
  */
