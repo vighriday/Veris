@@ -30,7 +30,7 @@ interface CliArgs {
     command: 'analyze' | 'init' | 'help' | 'doctor' | 'schema' | 'mcp' | 'version';
 }
 
-const VERIS_VERSION = '2.1.0';
+const VERIS_VERSION = '2.1.1';
 
 function parseArgs(argv: string[]): CliArgs {
     const args = argv.slice(2);
