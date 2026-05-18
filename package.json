@@ -1,6 +1,6 @@
 {
   "name": "veris-core",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "Veris — Behavioral Verification Infrastructure. MCP-native verification intelligence layer for autonomous coding agents.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -34,8 +34,8 @@
     "verification",
     "behavioral-graph",
     "code-analysis",
-    "claude-code",
-    "cursor",
+    "mcp-client",
+    "coding-agent",
     "ai-agents",
     "ts-morph",
     "typescript",

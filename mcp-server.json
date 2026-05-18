@@ -2,7 +2,7 @@
   "$schema": "https://modelcontextprotocol.io/schemas/server/v1.json",
   "name": "veris",
   "displayName": "Veris",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "Behavioral Verification Infrastructure — MCP-native verification intelligence layer. 17 tools for workflow grouping, drift detection, counterfactual reasoning, adversarial probe generation, and confidence modeling.",
   "license": "MIT",
   "homepage": "https://github.com/vighriday/Veris",
@@ -30,7 +30,7 @@
     { "name": "cross_repo_snapshot",        "category": "fleet" },
     { "name": "register_repo",              "category": "fleet" }
   ],
-  "tags": ["verification", "code-analysis", "behavioral-graph", "ai-agents", "claude-code", "cursor"],
+  "tags": ["verification", "code-analysis", "behavioral-graph", "ai-agents", "coding-agents", "mcp-client"],
   "platforms": ["linux", "darwin", "win32"],
   "engines": { "node": ">=18.0.0" }
 }

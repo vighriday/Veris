@@ -2,6 +2,20 @@
 
 All notable changes to Veris (Behavioral Verification Infrastructure) will be documented in this file.
 
+## [2.1.2] - 2026-05-18
+
+### Changed
+
+- Vendor-neutral sweep: removed `claude-code` and `cursor` from package.json keywords, skill.json keywords, mcp-server.json tags. Replaced with `mcp-client` / `coding-agent`.
+- Dashboard verification-targets card heading: "send directive to Claude" → "send directive to your agent".
+- Git history pruned: filter-branch backup refs (`refs/original/*`) deleted and aggressive GC removed dangling commits carrying old co-author trailers.
+
+## [2.1.1] - 2026-05-18
+
+### Fixed
+
+- `npx veris-core` failed with "could not determine executable to run" because the package exposed only `veris` and `veris-mcp` bins. Added a `veris-core` bin alias pointing to the CLI so every README command works directly.
+
 ## [2.1.0] - 2026-05-18 — "Public-ready"
 
 ### Security
@@ -31,7 +45,7 @@ All notable changes to Veris (Behavioral Verification Infrastructure) will be do
 
 ### Added — Marketplace + OSS files
 
-- `skill.json` — Claude Skills (skills.sh) manifest with MCP wiring, env vars, permissions, privacy claims.
+- `skill.json` — skills.sh manifest with MCP wiring, env vars, permissions, privacy claims.
 - `mcp-server.json` — MCP registry manifest with categorized tool list.
 - `.npmignore` — publish-clean package.
 - `SECURITY.md` — threat model + reporting flow.

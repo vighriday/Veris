@@ -486,7 +486,7 @@ function renderDashboard(payload: DashboardPayload): string {
 
   <!-- Verification Targets -->
   <div class="card full">
-    <h2>Verification Targets — click "Copy" to send directive to Claude</h2>
+    <h2>Verification Targets — click "Copy" to send directive to your agent</h2>
     <div class="filters">
       <input id="targetFilter" placeholder="Filter targets..." />
       <select id="tierFilter">
