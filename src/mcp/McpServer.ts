@@ -118,7 +118,7 @@ export class VerisMcpServer {
               description: "Counterfactual: simulates removing the named nodes from the head graph, then recomputes diff + risk vs the actual base. Answers 'what behaviors recover if I revert this?'.",
               inputSchema: { type: "object", properties: { nodeIds: { type: "array", items: { type: "string" } } }, required: ["nodeIds"] } },
             { name: "report_execution",
-              description: "Closes the feedback loop. External agents (CI, Claude Code, Cursor) post back verification results — pass/fail/flaky/skipped per nodeId+tier+directive. Confidence math now uses real data instead of a counter.",
+              description: "Closes the feedback loop. External agents (any MCP-compatible coding agent, CI runner) post back verification results — pass/fail/flaky/skipped per nodeId+tier+directive. Confidence math now uses real data instead of a counter.",
               inputSchema: {
                   type: "object",
                   properties: {

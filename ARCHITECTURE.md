@@ -1,6 +1,6 @@
 # Veris Architecture
 
-High-level overview of end-to-end architecture, built natively in TypeScript/Node.js, mapping directly to the 33-section PRD (`behavioral_verification_infrastructure_prd.md`).
+High-level overview of end-to-end architecture, built natively in TypeScript/Node.js.
 
 ## Core Data Flow
 

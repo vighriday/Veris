@@ -155,7 +155,7 @@ All notable changes to Veris (Behavioral Verification Infrastructure) will be do
 
 - `@modelcontextprotocol/sdk` wired in.
 - `McpServer.ts` registers the five PRD tools.
-- `start:mcp` script for stdio execution under MCP clients (Claude Code, Cursor).
+- `start:mcp` script for stdio execution under any MCP-compatible client.
 
 ### Phase 4 — Verification Planning and Confidence
 

@@ -36,12 +36,8 @@ body:
       placeholder: "20.x"
     validations:
       required: true
-  - type: dropdown
+  - type: input
     attributes:
       label: MCP client
-      options:
-        - "Claude Code (VS Code extension)"
-        - "Claude Code (terminal)"
-        - "Cursor"
-        - "CLI only (no MCP client)"
-        - "Other"
+      description: Which MCP-compatible agent or runtime were you using? Or "CLI only" if you ran Veris standalone.
+      placeholder: "e.g. CLI only, or your MCP client name + version"

@@ -8,9 +8,9 @@
 [![MCP](https://img.shields.io/badge/MCP-17_tools-purple)](docs/MCP_TOOLS.md)
 [![Local-first](https://img.shields.io/badge/local--first-yes-success)](#privacy)
 
-Veris is the verification intelligence layer that sits between AI coding agents and production reliability. It does **not** run your tests. It tells Claude Code, Cursor, and CI pipelines **what behaviors are at risk, what to verify, and how confident the result actually is** — backed by a behavioral graph, semantic workflow grouping, persistent run history, drift detection, and explainable confidence math.
+Veris is the verification intelligence layer that sits between AI coding agents and production reliability. It does **not** run your tests. It tells any MCP-compatible coding agent or CI pipeline **what behaviors are at risk, what to verify, and how confident the result actually is** — backed by a behavioral graph, semantic workflow grouping, persistent run history, drift detection, and explainable confidence math.
 
-Fully open source. MCP-native. Local-first. No cloud. No telemetry. No paid tier.
+Works with any MCP client. CLI works standalone. Fully open source. Local-first. No cloud. No telemetry. No paid tier.
 
 ---
 
@@ -18,7 +18,7 @@ Fully open source. MCP-native. Local-first. No cloud. No telemetry. No paid tier
 
 ### Option A — As an MCP server (one config line)
 
-Add to your MCP client config (Claude Code, Cursor, Continue, etc.):
+Veris speaks the Model Context Protocol. Drop this into any MCP-compatible client config:
 
 ```json
 {
@@ -79,7 +79,9 @@ node dist/cli.js .
 
 ---
 
-## What you say to Claude Code
+## Example agent prompts
+
+Any MCP-compatible agent can drive Veris with prompts like these:
 
 ```text
 veris: analyze_pr_behavior with baseRef=origin/main
@@ -88,7 +90,7 @@ veris: generate_adversarial_probes for the highest-risk workflow, then allocate_
 veris: what_if_revert nodeIds=[...]
 ```
 
-After your agent runs tests, close the loop:
+After your agent runs the verifications it executed externally, close the loop:
 
 ```text
 veris: report_execution executions=[{nodeId:..., tier:'Tier 3', result:'pass'}, ...]
@@ -130,7 +132,7 @@ Full plugin API: [docs/PLUGINS.md](docs/PLUGINS.md). Example: [examples/plugin-f
 
 ## MCP tool reference
 
-17 tools across 6 categories: ingest, diff, plan, semantic, drift, counterfactual, verification, feedback, history, fleet.
+17 tools across categories: ingest, diff, plan, semantic, drift, counterfactual, verification, feedback, history, fleet.
 
 See [docs/MCP_TOOLS.md](docs/MCP_TOOLS.md) for the full reference with recommended flows.
 
@@ -153,7 +155,7 @@ Source -> AST (ts-morph)
        -> MCP (17 tools) -> autonomous agents close the loop via report_execution
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the deep dive. The 33-section foundational PRD lives at [behavioral_verification_infrastructure_prd.md](behavioral_verification_infrastructure_prd.md).
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the deep dive.
 
 ---
 

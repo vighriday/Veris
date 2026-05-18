@@ -91,7 +91,7 @@ Include:
 - Veris version (`npx veris help` shows version)
 - Output of `node --version`
 - A minimal repo that reproduces the issue, or a redacted `.veris/state.db` (the schema is documented).
-- For MCP issues: which client (Claude Code, Cursor, ...) and the request/response from your client's logs.
+- For MCP issues: which MCP client you are using and the request/response from your client's logs.
 
 ## Sponsorship
 

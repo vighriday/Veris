@@ -14,7 +14,7 @@ The threat model is:
 
 - **Untrusted source repositories** analyzed by Veris. Veris executes `git` and reads files. It does **not** execute user code.
 - **Plugins** loaded from `.veris/plugins/*.js`. Plugins run in-process. Trust model is identical to any other `require()`. Set `VERIS_PLUGINS_DISABLED=1` to disable.
-- **MCP clients** (Claude Code, Cursor, etc.). The MCP server speaks over stdio and never opens network sockets.
+- **MCP clients**. The MCP server speaks over stdio and never opens network sockets.
 
 ## Hardenings already in place
 

@@ -10,7 +10,6 @@ veris-reports/
 *.log
 *.tsbuildinfo
 node_modules/
-behavioral_verification_infrastructure_prd.md
 PLAN.md
 CONTRIBUTING.md
 ARCHITECTURE.md

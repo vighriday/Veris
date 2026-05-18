@@ -10,7 +10,7 @@ import { RiskReport } from '../models/RiskModels';
  * requests with identical idempotency keys") that an autonomous agent can execute.
  *
  * The generator never executes — it only produces directives. External agents
- * (Claude Code, Cursor, CI) handle execution.
+ * (any MCP-compatible coding agent, CI runner) handle execution.
  */
 export interface AdversarialProbe {
     nodeId: string;
