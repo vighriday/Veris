@@ -10,8 +10,11 @@ const path = require('path');
   
   const page = await browser.newPage();
   
-  // Convert Windows path to proper file URI
-  const fileUrl = 'file:///' + path.resolve(__dirname, '../demo-app/veris-reports/veris-dashboard.html').replace(/\\/g, '/');
+  // Convert Windows path to proper file URI. Allow override via VERIS_DASHBOARD env
+  // so screenshots can be taken from a path that does not leak the username.
+  const dashboard = process.env.VERIS_DASHBOARD
+    || path.resolve(__dirname, '../demo-app/veris-reports/veris-dashboard.html');
+  const fileUrl = 'file:///' + dashboard.replace(/\\/g, '/');
   console.log(`Navigating to ${fileUrl}`);
   
   await page.goto(fileUrl, { waitUntil: 'networkidle0' });

@@ -69,7 +69,7 @@ node dist/cli.js .
 | Surface | What lands |
 |---|---|
 | **Behavioral graph** | Classes, methods, functions linked by `DependsOn` and real `Invokes` edges (call-expression resolution) |
-| **Semantic workflows** | Auto-clustered into 28 domains (Authentication, Billing, Checkout, Caching, Queue, Webhooks, AI, ...) |
+| **Semantic workflows** | Auto-clustered into 25 domains (Authentication, Billing, Checkout, Caching, Queue, Webhooks, AI, ...) |
 | **Real git diff** | Worktree-based diff vs any base ref. Not a placeholder |
 | **Risk scoring** | Blast radius, fragility, runtime criticality + plain-English explanations |
 | **Confidence math** | Half-life decay over real execution history. Failed runs reduce confidence; flaky = half credit |

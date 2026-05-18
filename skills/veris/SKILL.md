@@ -47,7 +47,7 @@ That's it. No API keys. No cloud. State persists locally at `<projectRoot>/.veri
 | `analyze_pr_behavior` | Diff-aware: only what's changed in the current PR |
 | `generate_verification_plan` | Tier 1/2/3 verification targets per node |
 | `identify_unverified_behaviors` | Nodes flagged risky but no execution coverage |
-| `list_workflows` | All 28 semantic workflow domains detected |
+| `list_workflows` | All 25 semantic workflow domains detected |
 | `analyze_workflow` | Drill into one workflow (members, signals, risk, probes) |
 | `detect_drift` | Behavioral drift vs prior runs (via SHA-256 fingerprints) |
 | `generate_adversarial_probes` | Concrete scenarios per workflow with expected invariants |
@@ -62,7 +62,7 @@ That's it. No API keys. No cloud. State persists locally at `<projectRoot>/.veri
 
 ### What "workflow" means here
 
-Veris classifies every function/class/method into one of 28 semantic domains:
+Veris classifies every function/class/method into one of 25 semantic domains:
 
 - Authentication, Authorization, Session
 - Payments, Billing, Checkout, Cart
