@@ -11,6 +11,7 @@
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](#install)
 [![MCP](https://img.shields.io/badge/MCP-17_tools-purple)](docs/MCP_TOOLS.md)
 [![Local-first](https://img.shields.io/badge/local--first-yes-success)](#privacy)
+[![Veris MCP server](https://glama.ai/mcp/servers/vighriday/Veris/badges/score.svg)](https://glama.ai/mcp/servers/vighriday/Veris)
 
 Veris is the verification intelligence layer that sits between AI coding agents and production reliability. It does **not** run your tests. It tells any MCP-compatible coding agent or CI pipeline **what behaviors are at risk, what to verify, and how confident the result actually is** — backed by a behavioral graph, semantic workflow grouping, persistent run history, drift detection, and explainable confidence math.
 
