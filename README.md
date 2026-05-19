@@ -151,7 +151,7 @@ Source -> AST (ts-morph)
        -> Behavioral Graph (DependsOn + Invokes)
        -> Real git-worktree diff vs base ref
        -> Risk model (blast / fragility / criticality + explanations)
-       -> Workflow classifier (28 semantic kinds, plugin-extensible)
+       -> Workflow classifier (25 semantic kinds, plugin-extensible)
        -> Fingerprints -> Drift detector (vs SQLite history)
        -> Adversarial probe generator
        -> Verification plan (Tier 1/2/3)
