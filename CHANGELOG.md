@@ -6,7 +6,7 @@ All notable changes to Veris (Behavioral Verification Infrastructure) will be do
 
 ### Added
 
-- **Unit test suite (Vitest)**: real assertion tests for the pure engines — `BehavioralDiffEngine`, `RiskModelingEngine`, `ConfidenceEngine`, `VerificationBudgetAllocator` — under `tests/unit/`, with shared graph builders in `tests/unit/helpers.ts`.
+- **Unit test suite (Vitest)**: 55 assertion tests over the pure engines under `tests/unit/`, with shared graph/report builders in `tests/unit/helpers.ts`. Covered engines: `BehavioralDiffEngine`, `RiskModelingEngine`, `ConfidenceEngine`, `VerificationBudgetAllocator`, `VerificationPlanningEngine`, `BehavioralGraphEngine`, `WorkflowClassifier`, `WorkflowFingerprintEngine`, `DriftDetector`, `CounterfactualEngine`, `AdversarialProbeGenerator`, `OnboardingExporter`. Engine coverage: **16% → 61%**.
 - `npm test`, `npm run test:watch`, `npm run test:coverage` scripts.
 - CI now runs `npm test` on Node 18/20/22 before build. Green is required to merge.
 

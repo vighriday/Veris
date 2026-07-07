@@ -59,6 +59,6 @@ Areas where outside help moves the needle most, in priority order:
 3. **Workflow rule tuning** for popular OSS repos — open a PR with classifier output snapshots and proposed rule deltas.
 4. **Probe templates** drawn from real production incidents (anonymized).
 5. **Calibration data**: report incidents Veris flagged that actually broke, and incidents Veris missed.
-6. **Test coverage** for engines not yet under `tests/unit/` (classifier, drift, counterfactual, fingerprint) — regression safety lets everyone move faster.
+6. **Test coverage** for the IO-bound engines not yet under `tests/unit/` (repository intelligence, git diff driver, watch mode) — the pure engines are covered; these need fixture repos or a git harness.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor guide. See [docs/MOAT.md](docs/MOAT.md) for the strategic context behind these priorities.

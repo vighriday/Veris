@@ -1,6 +1,8 @@
 import { BehavioralGraph, GraphNode, NodeType, EdgeType } from '../../src/models/GraphModels';
 import { RiskReport } from '../../src/models/RiskModels';
 import { VerificationPlan, VerificationTarget, VerificationTier } from '../../src/models/VerificationModels';
+import { RepositoryIntelligenceReport, VerisFile } from '../../src/models/EntityModels';
+import { WorkflowDomain, WorkflowKind } from '../../src/models/WorkflowModels';
 
 /** Build a graph node with sensible defaults. */
 export function node(id: string, label?: string, type: NodeType = NodeType.Function): GraphNode {
@@ -41,4 +43,44 @@ export function target(nodeId: string, tier: VerificationTier): VerificationTarg
 /** Build a verification plan from targets. */
 export function plan(targets: VerificationTarget[]): VerificationPlan {
     return { targets, executionRecommendations: [] };
+}
+
+/** Build a function entity. */
+export function fn(name: string, calls: string[] = []): VerisFile['functions'][number] {
+    return { name, isExported: true, calls };
+}
+
+/** Build a class entity with methods. */
+export function cls(name: string, methods: string[] = []): VerisFile['classes'][number] {
+    return { name, methods: methods.map(m => fn(m)) };
+}
+
+/** Build a VerisFile. */
+export function file(
+    filePath: string,
+    opts: { classes?: VerisFile['classes']; functions?: VerisFile['functions']; imports?: string[] } = {}
+): VerisFile {
+    return {
+        filePath,
+        classes: opts.classes ?? [],
+        functions: opts.functions ?? [],
+        imports: opts.imports ?? [],
+    };
+}
+
+/** Build a RepositoryIntelligenceReport. dependencyMap defaults to each file's imports. */
+export function repo(files: VerisFile[], projectPath = '/tmp/veris-test'): RepositoryIntelligenceReport {
+    const dependencyMap: Record<string, string[]> = {};
+    for (const f of files) dependencyMap[f.filePath] = f.imports;
+    return { projectPath, files, dependencyMap };
+}
+
+/** Build a WorkflowDomain. */
+export function domain(
+    id: string,
+    kind: WorkflowKind,
+    memberNodeIds: string[],
+    confidence = 80
+): WorkflowDomain {
+    return { id, name: kind, kind, memberNodeIds, signals: [], confidence };
 }
