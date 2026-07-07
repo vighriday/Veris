@@ -30,6 +30,9 @@
     "start:mcp": "node dist/mcp-index.js",
     "dev": "ts-node src/index.ts",
     "cli": "node dist/cli.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "test:mcp": "node dist/index.js && ts-node tests/test-mcp.ts",
     "test:mcp:deep": "ts-node tests/test-mcp-deep.ts",
     "doctor": "node dist/cli.js doctor",
@@ -74,7 +77,9 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.11.0",
+    "@vitest/coverage-v8": "^4.1.10",
     "ts-node": "^10.9.2",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vitest": "^4.1.10"
   }
 }

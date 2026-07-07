@@ -2,6 +2,14 @@
 
 All notable changes to Veris (Behavioral Verification Infrastructure) will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Unit test suite (Vitest)**: real assertion tests for the pure engines — `BehavioralDiffEngine`, `RiskModelingEngine`, `ConfidenceEngine`, `VerificationBudgetAllocator` — under `tests/unit/`, with shared graph builders in `tests/unit/helpers.ts`.
+- `npm test`, `npm run test:watch`, `npm run test:coverage` scripts.
+- CI now runs `npm test` on Node 18/20/22 before build. Green is required to merge.
+
 ## [2.1.8] - 2026-05-19 — "skills.sh"
 
 ### Added

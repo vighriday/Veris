@@ -18,6 +18,7 @@ Living document. Reflects intent, not commitments. PRs welcome on any item.
 - [x] Cross-repo registry for fleet snapshots.
 - [x] Local SQLite state with WAL, zero-retention mode.
 - [x] Public npm: `npx veris-core`.
+- [x] Vitest unit suite over the pure engines, gated in CI on Node 18/20/22.
 
 ## Next (v2.2 — Coverage and Accuracy)
 
@@ -58,5 +59,6 @@ Areas where outside help moves the needle most, in priority order:
 3. **Workflow rule tuning** for popular OSS repos — open a PR with classifier output snapshots and proposed rule deltas.
 4. **Probe templates** drawn from real production incidents (anonymized).
 5. **Calibration data**: report incidents Veris flagged that actually broke, and incidents Veris missed.
+6. **Test coverage** for engines not yet under `tests/unit/` (classifier, drift, counterfactual, fingerprint) — regression safety lets everyone move faster.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor guide. See [docs/MOAT.md](docs/MOAT.md) for the strategic context behind these priorities.

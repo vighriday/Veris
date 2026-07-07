@@ -5,6 +5,7 @@ bvi-reports/
 test-project/veris-reports/
 test-project/bvi-reports/
 *.tsbuildinfo
+coverage/
 .DS_Store
 .claude/
 

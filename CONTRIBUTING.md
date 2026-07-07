@@ -71,17 +71,31 @@ npm run build
 node dist/cli.js .
 ```
 
+Run the unit tests (Vitest, no build needed — they run against `src/`):
+
+```bash
+npm test              # one-shot
+npm run test:watch    # re-run on change while developing
+npm run test:coverage # engine coverage report
+```
+
 For MCP development:
 
 ```bash
 npm run build && npx ts-node tests/test-mcp-deep.ts
 ```
 
+Unit tests live in `tests/unit/*.test.ts` and cover the pure engines
+(diff, risk, confidence, budget). MCP smoke scripts (`tests/test-mcp*.ts`)
+are integration checks driven by `npm run test:mcp:deep`. Shared graph
+builders live in `tests/unit/helpers.ts`.
+
 ## Pull requests
 
 - Keep PRs small. The first review pass looks at scope.
 - Update CHANGELOG.md under `## [Unreleased]`.
 - New engines belong in `src/engine/`. New persistence belongs in `src/persistence/`. New MCP tools belong in `src/mcp/McpServer.ts`.
+- Add a Vitest unit test in `tests/unit/` for any pure-engine logic you add or change. CI runs `npm test` on Node 18/20/22 — green is required to merge.
 - Add a smoke test if the change touches the CLI surface or an MCP tool.
 
 ## Reporting issues
