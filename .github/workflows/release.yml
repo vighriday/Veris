@@ -1,9 +1,18 @@
 name: Release
 
 # Publishing was previously manual from a maintainer laptop, with no attestation of
-# what source produced the tarball. This workflow publishes from a tagged commit with
-# npm provenance, so a consumer can verify the published artifact came from this
-# repository at this commit.
+# what source produced the tarball. This workflow publishes from a tagged commit via
+# npm trusted publishing (OIDC), so a consumer can verify the published artifact came
+# from this repository at this commit.
+#
+# There is no npm token. Authentication is a short-lived OIDC credential minted by
+# GitHub for this workflow file, exchanged with the registry at publish time. npm
+# restricted bypass-2FA granular access tokens on 2026-07-31 and removes their direct
+# publish capability in January 2027; trusted publishing is the path that survives
+# that, and it removes the long-lived credential rather than rotating it.
+#
+# The trusted publisher is registered against this exact filename. Renaming this file
+# breaks publishing until the registration on npmjs.com is updated to match.
 
 on:
   push:
@@ -18,23 +27,40 @@ on:
 
 permissions:
   contents: read
-  id-token: write   # required for npm provenance
+  id-token: write   # mints the OIDC token trusted publishing exchanges for registry auth
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          # Trusted publishing requires Node >= 22.14.0. Only the runner is pinned
+          # here; the package still supports the range declared in engines.
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
-          cache: 'npm'
+          # Deliberately no dependency cache. A release build should resolve from the
+          # registry rather than trust a cache entry keyed by a lockfile hash.
+
+      - name: Ensure npm supports trusted publishing
+        run: |
+          npm install -g npm@latest
+          v=$(npm --version)
+          echo "npm $v"
+          node -e '
+            const v = process.argv[1].split(".").map(Number);
+            const ok = v[0] > 11 || (v[0] === 11 && (v[1] > 5 || (v[1] === 5 && v[2] >= 1)));
+            if (!ok) {
+              console.error(`npm ${process.argv[1]} is below the 11.5.1 required for trusted publishing`);
+              process.exit(1);
+            }
+          ' "$v"
 
       - name: Install
         run: npm ci
@@ -72,8 +98,10 @@ jobs:
             exit 1
           fi
 
-      - name: Publish to npm with provenance
+      # No NODE_AUTH_TOKEN and no --provenance flag: trusted publishing authenticates
+      # over OIDC and attaches provenance on its own for a public repository. Passing a
+      # token here would silently take precedence over OIDC and reintroduce exactly the
+      # long-lived credential this is meant to remove.
+      - name: Publish to npm via trusted publishing
         if: startsWith(github.ref, 'refs/tags/v') && github.event.inputs.dry_run != 'true'
-        run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
