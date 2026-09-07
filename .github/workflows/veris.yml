@@ -7,16 +7,27 @@ on:
     branches: [main, master]
 
 jobs:
-  build-and-smoke:
-    name: build + smoke (Node ${{ matrix.node }})
+  build-and-verify:
+    name: verify (Node ${{ matrix.node }}, ${{ matrix.os }})
     strategy:
+      fail-fast: false
       matrix:
         node: ['18', '20', '22']
-    runs-on: ubuntu-latest
+        os: [ubuntu-latest]
+        include:
+          # better-sqlite3 is a native module and Veris ships a Windows-specific
+          # MAX_PATH fallback in the git worktree path. Linux-only CI could not
+          # catch a regression in either.
+          - node: '20'
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          # Veris diffs against the merge-base with the base ref. A shallow clone has
+          # no merge-base, and the run now fails loudly instead of inventing a
+          # baseline — so full history is required, not merely preferable.
           fetch-depth: 0
 
       - name: Setup Node.js ${{ matrix.node }}
@@ -28,8 +39,14 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: Typecheck
+        run: npx tsc --noEmit
+
       - name: Unit tests
         run: npm test
+
+      - name: Coverage
+        run: npm run test:coverage
 
       - name: Build
         run: npm run build
@@ -37,19 +54,39 @@ jobs:
       - name: Doctor
         run: node dist/cli.js doctor
 
+      - name: CLI rejects an unknown subcommand
+        shell: bash
+        run: |
+          if node dist/cli.js definitely-not-a-directory --quiet; then
+            echo "expected a non-zero exit for an unknown target"
+            exit 1
+          fi
+          echo "correctly rejected"
+
       - name: Smoke-test CLI
         run: node dist/cli.js . --base-ref=origin/${{ github.base_ref || github.ref_name }} --quiet
         env:
           VERIS_CONFIDENCE_THRESHOLD: '0'
 
-      - name: Smoke-test MCP chain
+      - name: Assert report output stays bounded
+        shell: bash
+        run: |
+          # A 156 MB dashboard and a 1.26 MB report were both shipped before this gate
+          # existed. Sizes are asserted, not eyeballed.
+          dash_bytes=$(wc -c < veris-reports/veris-dashboard.html)
+          md_bytes=$(wc -c < veris-reports/veris-report.md)
+          echo "dashboard=${dash_bytes} bytes, report=${md_bytes} bytes"
+          if [ "$dash_bytes" -gt 10000000 ]; then echo "dashboard exceeds 10MB"; exit 1; fi
+          if [ "$md_bytes" -gt 1000000 ]; then echo "markdown report exceeds 1MB"; exit 1; fi
+
+      - name: MCP integration check
         run: npx ts-node tests/test-mcp-deep.ts
-        timeout-minutes: 2
+        timeout-minutes: 5
 
       - name: Upload Veris Reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: veris-reports-node${{ matrix.node }}
+          name: veris-reports-${{ matrix.os }}-node${{ matrix.node }}
           path: veris-reports/
           if-no-files-found: ignore
