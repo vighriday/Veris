@@ -48,9 +48,15 @@ jobs:
           # Deliberately no dependency cache. A release build should resolve from the
           # registry rather than trust a cache entry keyed by a lockfile hash.
 
+      # Pinned to 11.x, not @latest. npm 12 blocks dependency install scripts by
+      # default, so better-sqlite3 never fetches its prebuilt binding and the suite
+      # fails on the persistence paths. That is a real change worth supporting, but
+      # a release job is the wrong place to discover it: these gates should run in
+      # the same environment the unit matrix already proves green. 11.x satisfies
+      # the >= 11.5.1 trusted publishing needs.
       - name: Ensure npm supports trusted publishing
         run: |
-          npm install -g npm@latest
+          npm install -g npm@11
           v=$(npm --version)
           echo "npm $v"
           node -e '
