@@ -8,7 +8,7 @@ import { RiskModelingEngine } from './engine/RiskModelingEngine';
 import { VerificationPlanningEngine } from './engine/VerificationPlanningEngine';
 import { ConfidenceEngine } from './engine/ConfidenceEngine';
 import { ReportingEngine } from './reporting/ReportingEngine';
-import { GitDiffDriver } from './engine/GitDiffDriver';
+import { GitDiffDriver, BaselineError } from './engine/GitDiffDriver';
 import { BehavioralGraph } from './models/GraphModels';
 import { WorkflowClassifier } from './engine/WorkflowClassifier';
 import { WorkflowFingerprintEngine } from './engine/WorkflowFingerprint';
@@ -19,6 +19,7 @@ import { OnboardingExporter } from './engine/OnboardingExporter';
 import { RepositoryIntelligenceReport } from './models/EntityModels';
 import { VerisState } from './persistence/VerisState';
 import { loadPlugins } from './plugins/PluginLoader';
+import { VERIS_VERSION } from './version';
 
 interface CliArgs {
     targetDir: string;
@@ -27,47 +28,88 @@ interface CliArgs {
     withOnboarding: boolean;
     watch: boolean;
     quiet: boolean;
+    allowPlugins: boolean;
     command: 'analyze' | 'init' | 'help' | 'doctor' | 'schema' | 'mcp' | 'version';
 }
 
-const VERIS_VERSION = '2.1.8';
+export class CliUsageError extends Error {}
 
+const SUBCOMMANDS = ['analyze', 'init', 'doctor', 'schema', 'mcp', 'version', 'help'] as const;
+
+/**
+ * `analyze` is an explicit subcommand, not a fallthrough. Previously any
+ * non-flag token was treated as a target path, so `veris analyze` resolved
+ * `./analyze`, found nothing, and exited 0 — the exact invocation skill.json
+ * advertises. A token that is neither a known subcommand nor an existing
+ * directory is now a usage error rather than a silent no-op.
+ */
 function parseArgs(argv: string[]): CliArgs {
     const args = argv.slice(2);
-    let targetDir = process.cwd();
+    const base = { withOnboarding: false, watch: false, quiet: false, allowPlugins: false };
+
+    if (args[0] === 'init')    return { ...base, command: 'init', targetDir: args[1] ? path.resolve(args[1]) : process.cwd() };
+    if (args[0] === 'doctor')  return { ...base, command: 'doctor', targetDir: args[1] ? path.resolve(args[1]) : process.cwd() };
+    if (args[0] === 'schema')  return { ...base, command: 'schema', targetDir: process.cwd() };
+    if (args[0] === 'mcp')     return { ...base, command: 'mcp', targetDir: process.cwd() };
+    if (args[0] === 'version' || args[0] === '--version' || args[0] === '-v') return { ...base, command: 'version', targetDir: process.cwd() };
+    if (args[0] === 'help' || args[0] === '--help' || args[0] === '-h') return { ...base, command: 'help', targetDir: process.cwd() };
+
+    let targetDir: string | null = null;
     let baseRef: string | undefined;
     let budget: number | undefined;
     let withOnboarding = false;
     let watch = false;
     let quiet = false;
-    let command: CliArgs['command'] = 'analyze';
+    let allowPlugins = false;
 
-    if (args[0] === 'init')    return { command: 'init', targetDir: args[1] ? path.resolve(args[1]) : process.cwd(), withOnboarding: false, watch: false, quiet: false };
-    if (args[0] === 'doctor')  return { command: 'doctor', targetDir, withOnboarding: false, watch: false, quiet: false };
-    if (args[0] === 'schema')  return { command: 'schema', targetDir, withOnboarding: false, watch: false, quiet: false };
-    if (args[0] === 'mcp')     return { command: 'mcp', targetDir, withOnboarding: false, watch: false, quiet: false };
-    if (args[0] === 'version' || args[0] === '--version' || args[0] === '-v') return { command: 'version', targetDir, withOnboarding: false, watch: false, quiet: false };
-    if (args[0] === 'help' || args[0] === '--help' || args[0] === '-h') return { command: 'help', targetDir, withOnboarding: false, watch: false, quiet: false };
+    // `veris analyze [path]` and bare `veris [path]` are both accepted.
+    const positional = args[0] === 'analyze' ? args.slice(1) : args;
 
-    for (const a of args) {
-        if (a.startsWith('--base-ref=')) baseRef = a.split('=')[1];
-        else if (a.startsWith('--budget=')) budget = parseInt(a.split('=')[1], 10);
-        else if (a === '--onboarding') withOnboarding = true;
+    for (const a of positional) {
+        if (a.startsWith('--base-ref=')) {
+            baseRef = a.slice('--base-ref='.length);
+            if (!baseRef) throw new CliUsageError('--base-ref requires a value, e.g. --base-ref=origin/main');
+        } else if (a.startsWith('--budget=')) {
+            const raw = a.slice('--budget='.length);
+            budget = Number(raw);
+            if (!Number.isFinite(budget) || budget <= 0) {
+                throw new CliUsageError(`--budget must be a positive number of minutes, got ${JSON.stringify(raw)}`);
+            }
+        } else if (a === '--onboarding') withOnboarding = true;
         else if (a === '--watch') watch = true;
         else if (a === '--quiet' || a === '-q') quiet = true;
-        else if (a.startsWith('--')) continue;
-        else targetDir = path.resolve(a);
+        else if (a === '--allow-plugins') allowPlugins = true;
+        else if (a.startsWith('-')) {
+            throw new CliUsageError(`Unknown flag ${JSON.stringify(a)}. Run \`veris help\` for usage.`);
+        } else if (targetDir === null) {
+            targetDir = path.resolve(a);
+        } else {
+            throw new CliUsageError(`Unexpected extra argument ${JSON.stringify(a)}. Only one target path is accepted.`);
+        }
     }
-    return { command, targetDir, baseRef, budget, withOnboarding, watch, quiet };
+
+    const resolved = targetDir ?? process.cwd();
+    if (!fs.existsSync(resolved)) {
+        const hint = SUBCOMMANDS.includes(path.basename(resolved) as any)
+            ? ` Did you mean \`veris ${path.basename(resolved)}\`?`
+            : '';
+        throw new CliUsageError(`Target path does not exist: ${resolved}.${hint}`);
+    }
+    if (!fs.statSync(resolved).isDirectory()) {
+        throw new CliUsageError(`Target path is not a directory: ${resolved}`);
+    }
+
+    return { command: 'analyze', targetDir: resolved, baseRef, budget, withOnboarding, watch, quiet, allowPlugins };
 }
 
 function printHelp() {
     console.log(`Veris ${VERIS_VERSION} - Behavioral Verification Infrastructure
 
 Usage:
-  veris [path]                         Analyze repo at path (default: cwd)
+  veris analyze [path]                 Analyze repo at path (default: cwd)
+  veris [path]                         Same as \`veris analyze\`
   veris init [path]                    Scaffold .veris/ in a new project
-  veris doctor                         Health check (deps, state, git, plugins)
+  veris doctor [path]                  Health check (deps, state, git, plugins)
   veris schema                         Print public JSON Schemas for tool outputs
   veris mcp                            Start the MCP server on stdio
   veris version                        Print version
@@ -79,11 +121,19 @@ Analyze flags:
   --onboarding                         Also write workflow onboarding map
   --watch                              Re-run on file change (debounced)
   --quiet                              Reduce log output
+  --allow-plugins                      Execute .veris/plugins/*.js from the target repo
 
 Env:
   VERIS_CONFIDENCE_THRESHOLD           Exit code 2 below this confidence
   VERIS_STATE_DISABLED=1               Skip SQLite state (zero-retention mode)
-  VERIS_PLUGINS_DISABLED=1             Skip .veris/plugins
+  VERIS_ENABLE_PLUGINS=1               Same as --allow-plugins
+
+Analysis requires a git repository with a resolvable base ref. Veris compares
+your working tree against the merge-base with that ref; it never fabricates a
+baseline. If no base ref resolves, the run fails with an explanation.
+
+Plugins execute code from the analyzed repository and are OFF by default. Only
+enable them for repositories you trust.
 
 Docs: https://github.com/vighriday/Veris
 `);
@@ -95,13 +145,35 @@ function runDoctor(targetDir: string) {
     out.push({ check: 'Project root readable', ok: fs.existsSync(targetDir), detail: targetDir });
     const pkg = path.join(targetDir, 'package.json');
     out.push({ check: 'package.json present', ok: fs.existsSync(pkg), detail: pkg });
-    const isGit = fs.existsSync(path.join(targetDir, '.git'));
-    out.push({ check: 'Git repository', ok: isGit, detail: isGit ? '.git found' : 'not a git repo (synthetic diff fallback active)' });
+    const gitDriver = new GitDiffDriver(targetDir);
+    const isGit = gitDriver.isGitRepo();
+    out.push({ check: 'Git repository', ok: isGit, detail: isGit ? 'detected' : 'not a git repo — analysis cannot run (Veris never fabricates a baseline)' });
+
+    // Baseline resolution is a hard requirement for analysis, so doctor reports it
+    // rather than letting the user discover it mid-run.
+    if (isGit) {
+        const resolution = gitDriver.resolveBase();
+        out.push({
+            check: 'Base ref',
+            ok: resolution.ok,
+            detail: resolution.ok
+                ? `${resolution.baseRef} → merge-base ${resolution.mergeBase.slice(0, 12)}`
+                : `${resolution.reason} — pass --base-ref=<ref>`
+        });
+    }
+
     const verisDir = path.join(targetDir, '.veris');
     out.push({ check: '.veris directory', ok: fs.existsSync(verisDir), detail: fs.existsSync(verisDir) ? verisDir : 'run `veris init` to scaffold' });
     const pluginsDir = path.join(verisDir, 'plugins');
     const pluginCount = fs.existsSync(pluginsDir) ? fs.readdirSync(pluginsDir).filter(f => /\.(js|mjs|cjs)$/.test(f)).length : 0;
-    out.push({ check: 'Plugins', ok: true, detail: pluginCount + ' loaded' });
+    const pluginsEnabled = process.env.VERIS_ENABLE_PLUGINS === '1';
+    out.push({
+        check: 'Plugins',
+        ok: true,
+        detail: pluginCount === 0
+            ? 'none present'
+            : `${pluginCount} present, ${pluginsEnabled ? 'ENABLED via VERIS_ENABLE_PLUGINS' : 'disabled (pass --allow-plugins to execute)'}`
+    });
     out.push({ check: 'better-sqlite3', ok: !!safeRequire('better-sqlite3'), detail: safeRequire('better-sqlite3') ? 'available' : 'missing (npm install)' });
     out.push({ check: 'ts-morph', ok: !!safeRequire('ts-morph'), detail: safeRequire('ts-morph') ? 'available' : 'missing (npm install)' });
 
@@ -171,7 +243,16 @@ module.exports.register = function (api) {
 }
 
 async function runCli() {
-    const args = parseArgs(process.argv);
+    let args: CliArgs;
+    try {
+        args = parseArgs(process.argv);
+    } catch (e) {
+        if (e instanceof CliUsageError) {
+            console.error(`veris: ${e.message}`);
+            process.exit(2);
+        }
+        throw e;
+    }
 
     if (args.command === 'help')    { printHelp(); return; }
     if (args.command === 'version') { console.log(VERIS_VERSION); return; }
@@ -206,40 +287,43 @@ async function analyzeOnce(args: CliArgs) {
     }
 
     try {
-        // Plugin layer
-        const plugins = loadPlugins(args.targetDir);
+        // Plugin layer. Off unless explicitly enabled: plugins are code from the
+        // repository under analysis.
+        const plugins = loadPlugins(args.targetDir, { allowExecution: args.allowPlugins });
         if (plugins.loadedPlugins.length > 0) {
-            console.log(`-> Plugins loaded: ${plugins.loadedPlugins.join(', ')}`);
+            console.log(`-> Plugins executed: ${plugins.loadedPlugins.join(', ')}`);
         }
+        for (const w of plugins.warnings) console.warn(`-> ${w}`);
 
         // State
         const state = new VerisState(args.targetDir);
         const runId = state.newRunId();
 
-        // Phase 1
-        console.log("-> Running Intelligence Engine on head...");
-        const intel = new RepositoryIntelligenceEngine(args.targetDir);
-        const headReport: RepositoryIntelligenceReport = intel.analyze();
-        const ge = new BehavioralGraphEngine();
-        const headGraph: BehavioralGraph = ge.buildGraphFromReport(headReport);
-
-        // Git diff
+        // Baseline + head graphs. There is no fallback: if a baseline cannot be
+        // established the run fails with a reason rather than inventing one.
+        console.log("-> Establishing baseline and analyzing head...");
         const gitDriver = new GitDiffDriver(args.targetDir);
-        let baseGraph: BehavioralGraph;
-        let diffMode = 'synthetic';
         const snap = gitDriver.snapshot(args.baseRef);
-        if (snap) {
-            console.log(`-> Git diff mode: ${snap.baseRef} -> ${snap.headRef}`);
-            baseGraph = snap.baseGraph;
-            diffMode = 'git';
-        } else {
-            console.log("-> Git diff unavailable. Falling back to synthetic 70% slice.");
-            baseGraph = new BehavioralGraph();
-            headGraph.getNodes().slice(0, Math.floor(headGraph.getNodes().length * 0.7)).forEach(n => baseGraph.addNode(n));
-            headGraph.getEdges().slice(0, Math.floor(headGraph.getEdges().length * 0.7)).forEach(e => baseGraph.addEdge(e));
-        }
+        const diffMode = 'git';
+        const headReport: RepositoryIntelligenceReport = snap.headReport;
+        const headGraph: BehavioralGraph = snap.headGraph;
+        const baseGraph: BehavioralGraph = snap.baseGraph;
 
-        console.log(`-> Graph: ${headGraph.getNodes().length} nodes, ${headGraph.getEdges().length} edges (head)`);
+        console.log(`-> Baseline: ${snap.baseRef} @ ${snap.baseCommit.slice(0, 12)} -> head ${snap.headRef}`);
+        if (snap.dirty) {
+            console.log(`   Working tree has ${snap.dirtyFileCount} uncommitted change${snap.dirtyFileCount === 1 ? '' : 's'}; this run is not reproducible from commits alone.`);
+        }
+        console.log(`-> Graph: ${headGraph.getNodes().length} nodes, ${headGraph.getEdges().length} edges (head), ${snap.trackedFileCount} tracked files`);
+
+        const hs = snap.headStats;
+        const totalCalls = hs.callsResolved + hs.callsHeuristic + hs.callsAmbiguous;
+        if (totalCalls > 0) {
+            const pct = ((hs.callsResolved / totalCalls) * 100).toFixed(1);
+            console.log(`-> Call resolution: ${hs.callsResolved} resolved (${pct}%), ${hs.callsHeuristic} single-candidate, ${hs.callsAmbiguous} ambiguous (no edge emitted)`);
+        }
+        if (hs.truncated) {
+            console.warn('-> WARNING: analysis truncated by file limit; graph is incomplete.');
+        }
 
         // Phase 3
         console.log("-> Calculating Risk Models...");
@@ -283,8 +367,8 @@ async function analyzeOnce(args: CliArgs) {
         const ts = new Date().toISOString();
         state.recordRun({
             runId, ts, diffMode,
-            baseRef: snap?.baseRef ?? null,
-            headRef: snap?.headRef ?? null,
+            baseRef: snap.baseRef,
+            headRef: snap.headRef,
             overallConfidence: confidence.overallConfidence,
             executionDepth: confidence.executionDepth,
             nodes: headGraph.getNodes().length,
@@ -314,10 +398,14 @@ async function analyzeOnce(args: CliArgs) {
         const reportingEngine = new ReportingEngine(args.targetDir);
         const meta = {
             diffMode,
-            baseRef: snap?.baseRef,
-            headRef: snap?.headRef,
+            baseRef: snap.baseRef,
+            baseCommit: snap.baseCommit,
+            headRef: snap.headRef,
+            dirty: snap.dirty,
+            dirtyFileCount: snap.dirtyFileCount,
             projectRoot: args.targetDir,
-            generatedAt: ts
+            generatedAt: ts,
+            stats: snap.headStats
         };
         const mdPath = reportingEngine.generateMarkdownReport(diffReport, riskReports, plan, confidence, meta);
         const dashboardPath = reportingEngine.generateDashboard({
@@ -354,6 +442,16 @@ async function analyzeOnce(args: CliArgs) {
 
     } catch (e) {
         const err = e as Error;
+        if (err instanceof BaselineError) {
+            // Deliberately fatal. Veris compares against a real prior state or it does
+            // not answer; there is no fabricated baseline to fall back to.
+            console.error(`\nVeris cannot analyze this repository: ${err.message}`);
+            console.error("\nA behavioral diff requires a real baseline. Options:");
+            console.error("  - Run inside a git repository with at least one commit");
+            console.error("  - Pass an explicit ref: --base-ref=HEAD~1 or --base-ref=origin/develop");
+            console.error("  - In shallow CI checkouts, fetch history: actions/checkout with fetch-depth: 0");
+            process.exit(3);
+        }
         console.error("\nVeris CLI Error.");
         console.error("Message:", err.message);
         if (err.message && err.message.includes('better-sqlite3')) {
@@ -361,8 +459,8 @@ async function analyzeOnce(args: CliArgs) {
             console.error("  npm rebuild better-sqlite3");
             console.error("  Or run with VERIS_STATE_DISABLED=1 to skip persistence.");
         } else if (err.message && err.message.toLowerCase().includes('git')) {
-            console.error("\nHint: git operation failed. Veris falls back to synthetic diff if git is unavailable.");
-            console.error("  Check `git status` works in this directory, or pass --base-ref=HEAD~1.");
+            console.error("\nHint: a git operation failed. Check `git status` works in this directory,");
+            console.error("  or pass an explicit --base-ref=HEAD~1.");
         } else if (err.message && err.message.includes('data/')) {
             console.error("\nHint: missing default data files. Try `npm rebuild` or reinstall veris-core.");
         }
