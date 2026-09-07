@@ -1,14 +1,30 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { RiskReport, DiffReport } from '../models/RiskModels';
-import { VerificationPlan, ConfidenceReport, VerificationTarget } from '../models/VerificationModels';
-import { BehavioralGraph, GraphNode, GraphEdge, NodeType, EdgeType } from '../models/GraphModels';
+import { VerificationPlan, ConfidenceReport } from '../models/VerificationModels';
+import { GraphNode, GraphEdge } from '../models/GraphModels';
 import { WorkflowReport } from '../models/WorkflowModels';
 import { DriftReport } from '../engine/DriftDetector';
 import { WorkflowFingerprint } from '../engine/WorkflowFingerprint';
 import { AdversarialProbe } from '../engine/AdversarialProbeGenerator';
 import { BudgetAllocation } from '../engine/VerificationBudgetAllocator';
 import { ConfidenceTrendRow } from '../persistence/VerisState';
+import { loadRiskConfig } from '../data/DataLoader';
+
+/**
+ * ReportingEngine — markdown and single-file HTML dashboard generation.
+ *
+ * The file is organised in four sections:
+ *   1. Types and constants.
+ *   2. Data shaping — pure, typed, unit-tested (escaping, render caps, stats).
+ *   3. Browser asset — assets/veris-dashboard.js, read from disk and inlined.
+ *   4. Template assembly — the HTML shell that stitches 2 and 3 together.
+ * Filesystem IO lives only in the ReportingEngine class at the bottom.
+ */
+
+// =====================================================================
+// Section 1 — types and constants
+// =====================================================================
 
 export interface ReportMeta {
     diffMode?: 'git' | 'synthetic' | string;
@@ -18,7 +34,77 @@ export interface ReportMeta {
     generatedAt?: string;
 }
 
-export const DASHBOARD_PAYLOAD_SCHEMA_VERSION = '1.1.0';
+/**
+ * Bumped from 1.1.0: the embedded payload now carries `render`, and its `graph`
+ * is a capped view of the analysed graph rather than the whole of it. Anything
+ * consuming the exported JSON must read `render` to know what it is looking at.
+ */
+export const DASHBOARD_PAYLOAD_SCHEMA_VERSION = '1.2.0';
+
+/**
+ * vis-network is loaded from a CDN, pinned to an exact version and verified with
+ * a Subresource Integrity hash. Unpinned (`unpkg.com/vis-network/...`) the page
+ * executed whatever that URL served at view time, in the reader's browser, with
+ * no way to notice a substitution — a live supply-chain path into every report
+ * (finding D3).
+ *
+ * The hash is the sha384 of the published 9.1.9 standalone UMD bundle (688,911
+ * bytes), computed from the file itself and cross-checked byte-for-byte against
+ * jsDelivr. Changing VIS_NETWORK_VERSION REQUIRES recomputing the hash:
+ *
+ *   curl -sSL https://unpkg.com/vis-network@<v>/standalone/umd/vis-network.min.js \
+ *     | openssl dgst -sha384 -binary | openssl base64 -A
+ *
+ * A stale hash makes the browser refuse the script — which is the safe failure,
+ * and the dashboard degrades around it with an explanation instead of a blank
+ * panel.
+ */
+export const VIS_NETWORK_VERSION = '9.1.9';
+export const VIS_NETWORK_URL = `https://unpkg.com/vis-network@${VIS_NETWORK_VERSION}/standalone/umd/vis-network.min.js`;
+export const VIS_NETWORK_SRI = 'sha384-yxKDWWf0wwdUj/gPeuL11czrnKFQROnLgY8ll7En9NYoXibgg3C6NK/UDHNtUgWJ';
+
+/** Risk at or above this scores as "high" in the dashboard's summary counters. */
+export const HIGH_RISK_THRESHOLD = 50;
+
+/**
+ * Documented ceilings on what the generated page renders. They exist so a large
+ * monorepo degrades legibly instead of producing a file no browser can open
+ * (finding F1 — one measured dashboard was 156 MB). Every cap is reported in the
+ * page as "showing N of M"; nothing is dropped silently.
+ *
+ * Scope: the caps reduce what is *drawn*. The embedded payload keeps the full
+ * diff, risk and plan arrays so "Export JSON" stays a complete record — only the
+ * graph, which is both the largest structure and the one vis-network cannot draw
+ * at scale, is reduced in the payload itself. Measured on a synthetic monorepo
+ * (20k nodes, 30k edges, 12k added, 20k targets) the page is ~4 MB.
+ */
+export interface DashboardRenderLimits {
+    /** Graph nodes embedded and drawn. vis-network's layout is already unusable well below this. */
+    maxNodes: number;
+    /** Edges kept between surviving nodes. */
+    maxEdges: number;
+    /** Rows in the server-rendered "added node list". */
+    maxAddedNodeRows: number;
+    /** Rows the browser renders per list panel (risks, targets, probes, budget). */
+    maxRows: number;
+}
+
+export const DEFAULT_RENDER_LIMITS: DashboardRenderLimits = {
+    maxNodes: 1500,
+    maxEdges: 4000,
+    maxAddedNodeRows: 500,
+    maxRows: 500,
+};
+
+/** What the page actually rendered, against what was analysed. */
+export interface DashboardRenderInfo {
+    shownNodes: number;
+    totalNodes: number;
+    shownEdges: number;
+    totalEdges: number;
+    truncated: boolean;
+    limits: DashboardRenderLimits;
+}
 
 export interface DashboardPayload {
     schemaVersion?: string;
@@ -36,167 +122,264 @@ export interface DashboardPayload {
     confidenceTrend?: ConfidenceTrendRow[];
     pluginsLoaded?: string[];
     runId?: string;
+    /** Set by the renderer on the embedded copy; absent on the caller's input. */
+    render?: DashboardRenderInfo;
 }
 
-export class ReportingEngine {
-
-    private outputDir: string;
-
-    constructor(projectRoot: string) {
-        this.outputDir = path.join(projectRoot, 'veris-reports');
-        if (!fs.existsSync(this.outputDir)) {
-            fs.mkdirSync(this.outputDir, { recursive: true });
-        }
-    }
-
-    public generateMarkdownReport(
-        diff: DiffReport,
-        risks: RiskReport[],
-        plan: VerificationPlan,
-        confidence: ConfidenceReport,
-        meta: ReportMeta = {}
-    ): string {
-        let md = `# Veris Executive Summary\n\n`;
-
-        if (meta.diffMode) {
-            md += `_Diff mode: **${meta.diffMode}**`;
-            if (meta.baseRef && meta.headRef) md += ` (${meta.baseRef} -> ${meta.headRef})`;
-            md += `_\n\n`;
-        }
-
-        md += `## 1. Repository Health & Confidence\n\n`;
-        md += `- **Overall Confidence Score:** ${confidence.overallConfidence}/100\n`;
-        md += `- **Execution Depth:** ${confidence.executionDepth}%\n\n`;
-
-        if (confidence.explanation.length > 0) {
-            md += `### Confidence Explainability\n\n`;
-            confidence.explanation.forEach(e => md += `- ${e}\n`);
-            md += `\n`;
-        }
-
-        if (confidence.unverifiedAssumptions.length > 0) {
-            md += `### Unverified Assumptions (Runtime Risks)\n\n`;
-            confidence.unverifiedAssumptions.forEach(u => md += `- ${u}\n`);
-            md += `\n`;
-        }
-
-        md += `## 2. Behavioral Diff & Workflow Risk Map\n\n`;
-        md += `- **Added Nodes:** ${diff.addedNodes.length}\n`;
-        md += `- **Removed Nodes:** ${diff.removedNodes.length}\n`;
-        md += `- **Added Edges:** ${diff.addedEdges.length}\n`;
-        md += `- **Removed Edges:** ${diff.removedEdges.length}\n`;
-        md += `- **Impacted Workflows/Nodes:** ${diff.impactedNodes.length}\n\n`;
-
-        if (risks.length > 0) {
-            md += `### Top Risk Factors\n\n`;
-            const sortedRisks = [...risks].sort((a, b) => b.score.overallRisk - a.score.overallRisk).slice(0, 5);
-            sortedRisks.forEach(r => {
-                md += `#### Node: \`${r.nodeId}\`\n\n`;
-                md += `- **Risk Score:** ${r.score.overallRisk.toFixed(2)} (Blast Radius: ${r.score.blastRadius}, Fragility: ${r.score.dependencyFragility})\n`;
-                r.score.explanation.forEach(exp => md += `- ${exp}\n`);
-                md += `\n`;
-            });
-        }
-
-        md += `## 3. Verification Coverage & Directives\n\n`;
-        md += `- **Total Verification Targets:** ${plan.targets.length}\n\n`;
-        md += `### Execution Recommendations\n\n`;
-        plan.executionRecommendations.forEach(rec => md += `- ${rec}\n`);
-        md += `\n`;
-
-        const mdPath = path.join(this.outputDir, 'veris-report.md');
-        fs.writeFileSync(mdPath, md, 'utf8');
-        return mdPath;
-    }
-
-    /**
-     * Generates a single-file interactive HTML dashboard.
-     * Embeds the full payload as JSON. Uses vis-network CDN for the graph viz.
-     * Sections: Confidence gauge, Diff summary, Workflow Risk Map (interactive graph),
-     * Risk cards (sortable), Verification targets (filterable + click-to-copy directives),
-     * Unverified assumptions, Coverage breakdown.
-     */
-    public generateDashboard(payload: DashboardPayload): string {
-        const htmlPath = path.join(this.outputDir, 'veris-dashboard.html');
-        const stamped: DashboardPayload = { schemaVersion: DASHBOARD_PAYLOAD_SCHEMA_VERSION, ...payload };
-        const html = renderDashboard(stamped);
-        fs.writeFileSync(htmlPath, html, 'utf8');
-        return htmlPath;
-    }
-
-    /**
-     * Kept for backwards compatibility. Re-uses old markdown -> HTML for simple consumers.
-     */
-    public generateHtmlReport(mdContent: string): string {
-        const body = this.renderMarkdown(mdContent);
-        const html = `<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="UTF-8"><title>Veris Report</title>
-<style>body{font-family:-apple-system,sans-serif;max-width:900px;margin:auto;padding:20px;line-height:1.6;}</style>
-</head><body>${body}</body></html>`;
-        const htmlPath = path.join(this.outputDir, 'veris-report.html');
-        fs.writeFileSync(htmlPath, html, 'utf8');
-        return htmlPath;
-    }
-
-    private renderMarkdown(md: string): string {
-        const lines = md.split(/\r?\n/);
-        const out: string[] = [];
-        let inList = false;
-        const closeList = () => { if (inList) { out.push('</ul>'); inList = false; } };
-        const inline = (s: string) => s
-            .replace(/`([^`]+)`/g, '<code>$1</code>')
-            .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-            .replace(/_([^_]+)_/g, '<em>$1</em>');
-
-        for (const raw of lines) {
-            const line = raw.trimEnd();
-            if (/^####\s+/.test(line)) { closeList(); out.push(`<h4>${inline(line.replace(/^####\s+/, ''))}</h4>`); continue; }
-            if (/^###\s+/.test(line))  { closeList(); out.push(`<h3>${inline(line.replace(/^###\s+/, ''))}</h3>`); continue; }
-            if (/^##\s+/.test(line))   { closeList(); out.push(`<h2>${inline(line.replace(/^##\s+/, ''))}</h2>`); continue; }
-            if (/^#\s+/.test(line))    { closeList(); out.push(`<h1>${inline(line.replace(/^#\s+/, ''))}</h1>`); continue; }
-            if (/^-\s+/.test(line))    {
-                if (!inList) { out.push('<ul>'); inList = true; }
-                out.push(`<li>${inline(line.replace(/^-\s+/, ''))}</li>`);
-                continue;
-            }
-            if (line.trim() === '') { closeList(); continue; }
-            closeList();
-            out.push(`<p>${inline(line)}</p>`);
-        }
-        closeList();
-        return out.join('\n');
-    }
+/** Budget constants handed to the browser. Sourced from data/risk-config.json. */
+export interface DashboardBudgetConfig {
+    tierLeverage: { [tier: string]: number };
+    tierCostSeconds: { [tier: string]: number };
+    workflowCriticality: { [kind: string]: number };
 }
 
-function renderDashboard(payload: DashboardPayload): string {
-    // Serialize payload safely for embedding inside <script>. JSON.stringify is
-    // safe for HTML except for `</script>` and U+2028/U+2029 line terminators
-    // which break a JS literal. Escape those.
-    const json = JSON.stringify(payload)
+export interface RenderDashboardOptions {
+    limits?: Partial<DashboardRenderLimits>;
+    /** Defaults to `loadRiskConfig(meta.projectRoot).budget`. */
+    budget?: DashboardBudgetConfig;
+    /** Defaults to the shipped assets/veris-dashboard.js. Injected by tests. */
+    clientScript?: string;
+}
+
+// =====================================================================
+// Section 2 — data shaping (pure, typed, unit-tested)
+// =====================================================================
+
+const HTML_ESCAPES: { [char: string]: string } = {
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+};
+
+/**
+ * Escape a value for HTML text or a quoted attribute.
+ *
+ * Every value below that came from analysed source, from a plugin, or from
+ * persisted state goes through this. Symbol names are attacker-controlled for
+ * this product's threat model: a repository under analysis can contain a class
+ * whose name is a script tag, and it used to land in the reader's DOM verbatim
+ * (finding D4).
+ */
+export function escapeHtml(value: unknown): string {
+    if (value === null || value === undefined) return '';
+    return String(value).replace(/[&<>"']/g, c => HTML_ESCAPES[c]);
+}
+
+/**
+ * Numeric interpolation guard. Payloads cross process boundaries (MCP, JSON on
+ * disk, plugins), so a field declared `number` can arrive as a string — and an
+ * unescaped string in a numeric slot is an injection site.
+ */
+export function formatNumber(value: unknown, digits = 0): string {
+    const n = Number(value);
+    return (Number.isFinite(n) ? n : 0).toFixed(digits);
+}
+
+export interface DashboardStats {
+    totalNodes: number;
+    totalEdges: number;
+    totalRisks: number;
+    highRiskCount: number;
+    targetsByTier: { structural: number; behavioral: number; adversarial: number };
+    confidenceColor: string;
+}
+
+export function buildDashboardStats(payload: DashboardPayload): DashboardStats {
+    const targets = payload.plan?.targets ?? [];
+    const confidence = Number(payload.confidence?.overallConfidence) || 0;
+    return {
+        totalNodes: payload.graph?.nodes?.length ?? 0,
+        totalEdges: payload.graph?.edges?.length ?? 0,
+        totalRisks: payload.risks?.length ?? 0,
+        highRiskCount: (payload.risks ?? []).filter(r => Number(r.score?.overallRisk) >= HIGH_RISK_THRESHOLD).length,
+        targetsByTier: {
+            structural: targets.filter(t => String(t.tier).startsWith('Tier 1')).length,
+            behavioral: targets.filter(t => String(t.tier).startsWith('Tier 2')).length,
+            adversarial: targets.filter(t => String(t.tier).startsWith('Tier 3')).length,
+        },
+        confidenceColor: confidence >= 70 ? '#5cb85c' : confidence >= 40 ? '#f0ad4e' : '#d9534f',
+    };
+}
+
+export interface RenderedGraph {
+    nodes: GraphNode[];
+    edges: GraphEdge[];
+    info: DashboardRenderInfo;
+}
+
+/**
+ * Reduce the graph to what the page will render.
+ *
+ * Ranking matters more than the cap itself: when the graph is over the ceiling,
+ * the nodes the report is *about* — everything the diff touched — are kept
+ * first, then the highest-risk remainder. A truncated dashboard therefore still
+ * shows the subject of the run rather than an arbitrary alphabetical prefix.
+ * Nodes that survive keep their original order so output stays deterministic.
+ */
+export function selectRenderedGraph(
+    graph: { nodes: GraphNode[]; edges: GraphEdge[] } | undefined,
+    diff: DiffReport | undefined,
+    risks: RiskReport[] | undefined,
+    limits: DashboardRenderLimits
+): RenderedGraph {
+    const nodes = graph?.nodes ?? [];
+    const edges = graph?.edges ?? [];
+
+    const priority = new Set<string>();
+    for (const list of [diff?.addedNodes, diff?.removedNodes, diff?.modifiedNodes, diff?.impactedNodes]) {
+        for (const n of list ?? []) priority.add(n.id);
+    }
+    const riskByNode = new Map<string, number>();
+    for (const r of risks ?? []) riskByNode.set(r.nodeId, Number(r.score?.overallRisk) || 0);
+
+    const maxNodes = Math.max(0, limits.maxNodes);
+    let keptNodes = nodes;
+    if (nodes.length > maxNodes) {
+        // Rank is (touched by the diff) first, then risk. The offset is larger
+        // than any risk score, so a touched node always outranks an untouched one.
+        const rank = (n: GraphNode): number => (priority.has(n.id) ? 1_000_000 : 0) + (riskByNode.get(n.id) ?? 0);
+        const keepIds = new Set(
+            [...nodes].sort((a, b) => rank(b) - rank(a)).slice(0, maxNodes).map(n => n.id)
+        );
+        keptNodes = nodes.filter(n => keepIds.has(n.id));
+    }
+
+    const keptIds = new Set(keptNodes.map(n => n.id));
+    const connected = edges.filter(e => keptIds.has(e.sourceId) && keptIds.has(e.targetId));
+    const keptEdges = connected.slice(0, Math.max(0, limits.maxEdges));
+
+    return {
+        nodes: keptNodes,
+        edges: keptEdges,
+        info: {
+            shownNodes: keptNodes.length,
+            totalNodes: nodes.length,
+            shownEdges: keptEdges.length,
+            totalEdges: edges.length,
+            truncated: keptNodes.length < nodes.length || keptEdges.length < edges.length,
+            limits,
+        },
+    };
+}
+
+/**
+ * Serialize for embedding inside a `<script type="application/json">` block.
+ * JSON is safe there except for the script closing sequence, which would end the
+ * block early; `<\/script` is a valid JSON string escape and parses back
+ * identically. U+2028/U+2029 are escaped too so the same string stays safe if it
+ * is ever moved into a JavaScript literal.
+ */
+export function serializeForScriptBlock(value: unknown): string {
+    return JSON.stringify(value ?? null)
         .replace(/<\/script/gi, '<\\/script')
         .replace(/\u2028/g, '\\u2028')
         .replace(/\u2029/g, '\\u2029');
+}
 
-    // Pre-compute summary stats
-    const totalNodes = payload.graph.nodes.length;
-    const totalEdges = payload.graph.edges.length;
-    const totalRisks = payload.risks.length;
-    const highRiskCount = payload.risks.filter(r => r.score.overallRisk >= 50).length;
-    const targetsByTier = {
-        structural: payload.plan.targets.filter(t => t.tier.startsWith('Tier 1')).length,
-        behavioral: payload.plan.targets.filter(t => t.tier.startsWith('Tier 2')).length,
-        adversarial: payload.plan.targets.filter(t => t.tier.startsWith('Tier 3')).length,
+// =====================================================================
+// Section 3 — browser asset
+// =====================================================================
+
+const CLIENT_ASSET_NAME = 'veris-dashboard.js';
+let cachedClientScript: string | null = null;
+
+/**
+ * Reject a script that cannot be inlined. Anything placed inside a script
+ * element ends it at the first closing sequence, spilling the rest into the
+ * document as markup — so the asset is checked rather than trusted.
+ */
+export function assertInlinableScript(source: string, origin: string): void {
+    if (/<\/script/i.test(source)) {
+        throw new Error(`veris: ${origin} contains a script closing sequence and cannot be inlined`);
+    }
+}
+
+/**
+ * Read the dashboard's browser runtime from assets/.
+ *
+ * The build is `tsc` only — no bundler and no copy step — so the asset cannot
+ * live under src/. assets/ is listed in package.json "files", so it ships in the
+ * npm tarball, and the candidate list resolves both from dist/reporting (packaged)
+ * and from src/reporting (ts-node, vitest). Mirrors DataLoader's resolution of
+ * the shipped data/ directory.
+ */
+export function loadDashboardClientScript(): string {
+    if (cachedClientScript !== null) return cachedClientScript;
+    const candidates = [
+        path.join(__dirname, '..', '..', 'assets', CLIENT_ASSET_NAME),
+        path.join(__dirname, '..', 'assets', CLIENT_ASSET_NAME),
+        path.join(__dirname, 'assets', CLIENT_ASSET_NAME),
+    ];
+    for (const candidate of candidates) {
+        if (!fs.existsSync(candidate)) continue;
+        const source = fs.readFileSync(candidate, 'utf8');
+        assertInlinableScript(source, candidate);
+        cachedClientScript = source;
+        return source;
+    }
+    throw new Error(
+        `veris: dashboard browser asset ${CLIENT_ASSET_NAME} not found. Looked in:\n  ${candidates.join('\n  ')}`
+    );
+}
+
+// =====================================================================
+// Section 4 — template assembly
+// =====================================================================
+
+function renderAddedNodeList(added: GraphNode[], maxRows: number): string {
+    if (added.length === 0) return '<div class="explain">None.</div>';
+    const rows = added.slice(0, maxRows)
+        .map(n => `<div class="added-node">+ ${escapeHtml(n.label)} <span style="opacity:0.6">(${escapeHtml(n.id)})</span></div>`)
+        .join('');
+    const note = added.length > maxRows
+        ? `<div class="cap-note">Showing ${maxRows} of ${added.length} added nodes — the full list is in the exported JSON.</div>`
+        : '';
+    return rows + note;
+}
+
+function renderCoverageNote(info: DashboardRenderInfo): string {
+    if (!info.truncated) {
+        return `Showing all ${info.totalNodes} nodes and ${info.totalEdges} edges.`;
+    }
+    return `Showing ${info.shownNodes} of ${info.totalNodes} nodes and ${info.shownEdges} of ${info.totalEdges} edges `
+        + `(cap: ${info.limits.maxNodes} nodes / ${info.limits.maxEdges} edges). `
+        + `Nodes touched by the diff and the highest-risk remainder are kept first.`;
+}
+
+export function renderDashboard(payload: DashboardPayload, options: RenderDashboardOptions = {}): string {
+    const limits: DashboardRenderLimits = { ...DEFAULT_RENDER_LIMITS, ...(options.limits ?? {}) };
+    const budget = options.budget ?? loadRiskConfig(payload.meta?.projectRoot ?? process.cwd()).budget;
+    const clientScript = options.clientScript ?? loadDashboardClientScript();
+
+    const rendered = selectRenderedGraph(payload.graph, payload.diff, payload.risks, limits);
+    const stats = buildDashboardStats(payload);
+
+    // The embedded payload carries the capped graph — it is what the page draws,
+    // and embedding the uncapped one would defeat the cap on file size entirely.
+    const embedded: DashboardPayload = {
+        schemaVersion: DASHBOARD_PAYLOAD_SCHEMA_VERSION,
+        ...payload,
+        graph: { nodes: rendered.nodes, edges: rendered.edges },
+        render: rendered.info,
     };
-    const confColor = payload.confidence.overallConfidence >= 70 ? '#5cb85c'
-                    : payload.confidence.overallConfidence >= 40 ? '#f0ad4e' : '#d9534f';
+    const pageConfig = {
+        visNetworkVersion: VIS_NETWORK_VERSION,
+        render: rendered.info,
+        budget,
+    };
+
+    const confidence = Number(payload.confidence?.overallConfidence) || 0;
+    const gaugeArc = formatNumber((confidence / 100) * 427, 1);
+    const assumptions = payload.confidence?.unverifiedAssumptions ?? [];
+    const explanation = payload.confidence?.explanation ?? [];
+    const recommendations = payload.plan?.executionRecommendations ?? [];
 
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <title>Veris Dashboard</title>
-<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<!-- Exact version + Subresource Integrity: the browser refuses this file if a
+     single byte differs from the pinned build. See VIS_NETWORK_SRI. -->
+<script src="${VIS_NETWORK_URL}" integrity="${VIS_NETWORK_SRI}" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
   :root { --bg:#0f1115; --panel:#181b22; --panel2:#1f232c; --text:#e6e8ec; --muted:#9aa3b2;
           --accent:#4f8cff; --danger:#ff5d6c; --warn:#ffb347; --ok:#3ddc97; --border:#2a2f3a; }
@@ -220,6 +403,8 @@ function renderDashboard(payload: DashboardPayload): string {
   .gauge .label .v { font-size: 32px; font-weight: 700; }
   .gauge .label .s { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
   #graph { height: 460px; background: #0a0c10; border-radius: 8px; border:1px solid var(--border); }
+  .graph-fallback { padding: 24px; font-size: 13px; color: var(--muted); line-height: 1.6; }
+  .graph-fallback strong { display:block; color: var(--warn); margin-bottom: 6px; font-size: 14px; }
   .legend { display:flex; gap:14px; margin-top:8px; font-size:12px; color: var(--muted); flex-wrap:wrap; }
   .legend .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; }
   table { width:100%; border-collapse: collapse; font-size: 13px; }
@@ -227,6 +412,11 @@ function renderDashboard(payload: DashboardPayload): string {
   th { color: var(--muted); font-weight: 500; cursor: pointer; user-select:none; }
   th:hover { color: var(--accent); }
   td.id { font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; color: var(--muted); max-width: 360px; overflow:hidden; text-overflow: ellipsis; white-space:nowrap; }
+  .node-id { font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; color: var(--muted); }
+  .node-id.ellipsis { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .added-node { font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; color: var(--muted); padding: 2px 0; }
+  .cap-note { margin-top: 8px; font-size: 11px; color: var(--warn); }
+  .render-note { font-size: 11px; color: var(--muted); margin-top: 8px; }
   .pill { display:inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
   .pill.high { background: rgba(255,93,108,0.15); color: var(--danger); }
   .pill.med  { background: rgba(255,179,71,0.15); color: var(--warn); }
@@ -238,6 +428,7 @@ function renderDashboard(payload: DashboardPayload): string {
   .filters input, .filters select { background:var(--panel2); color:var(--text); border:1px solid var(--border); padding:6px 10px; border-radius:6px; font-size:12px; }
   details { background:var(--panel2); border:1px solid var(--border); border-radius:6px; padding:8px 12px; margin-bottom:6px; }
   details > summary { cursor:pointer; font-size:13px; }
+  .target-summary { display:flex; justify-content:space-between; align-items:center; gap:10px; }
   .copy-btn { background: var(--accent); color:#fff; border:none; padding:4px 10px; border-radius:5px; cursor:pointer; font-size: 11px; }
   .copy-btn:hover { background: #3a7be8; }
   .copy-btn.done { background: var(--ok); }
@@ -251,6 +442,7 @@ function renderDashboard(payload: DashboardPayload): string {
   .workflow-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
   .workflow-card { background: var(--panel2); border:1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 8px; padding: 14px; position:relative; cursor:pointer; transition: transform 0.15s; }
   .workflow-card:hover { transform: translateY(-1px); border-color: var(--accent); }
+  .workflow-card.is-active { outline: 2px solid var(--accent); outline-offset: 2px; }
   .workflow-card.risk-high { border-left-color: var(--danger); }
   .workflow-card.risk-med  { border-left-color: var(--warn); }
   .workflow-card.risk-low  { border-left-color: var(--ok); }
@@ -336,36 +528,37 @@ function renderDashboard(payload: DashboardPayload): string {
     <div class="gauge">
       <svg width="160" height="160" viewBox="0 0 160 160">
         <circle cx="80" cy="80" r="68" fill="none" stroke="#2a2f3a" stroke-width="12"/>
-        <circle id="gaugeArc" cx="80" cy="80" r="68" fill="none" stroke="${confColor}" stroke-width="12"
-                stroke-linecap="round" stroke-dasharray="${(payload.confidence.overallConfidence/100*427).toFixed(1)} 427"/>
+        <circle id="gaugeArc" cx="80" cy="80" r="68" fill="none" stroke="${stats.confidenceColor}" stroke-width="12"
+                stroke-linecap="round" stroke-dasharray="${gaugeArc} 427"/>
       </svg>
       <div class="label">
-        <div class="v" style="color:${confColor}">${payload.confidence.overallConfidence}</div>
+        <div class="v" style="color:${stats.confidenceColor}">${formatNumber(confidence, 0)}</div>
         <div class="s">of 100</div>
       </div>
     </div>
-    <div class="explain">Execution depth: <strong>${payload.confidence.executionDepth}%</strong></div>
+    <div class="explain">Execution depth: <strong>${formatNumber(payload.confidence?.executionDepth, 0)}%</strong></div>
   </div>
 
   <!-- Repo Health -->
   <div class="card half">
     <h2>Repository Health</h2>
     <div class="stat-row">
-      <div class="stat"><div class="label">Nodes</div><div class="value">${totalNodes}</div></div>
-      <div class="stat"><div class="label">Edges</div><div class="value">${totalEdges}</div></div>
-      <div class="stat"><div class="label">High Risks</div><div class="value" style="color:var(--danger)">${highRiskCount}</div></div>
+      <div class="stat"><div class="label">Nodes</div><div class="value">${stats.totalNodes}</div></div>
+      <div class="stat"><div class="label">Edges</div><div class="value">${stats.totalEdges}</div></div>
+      <div class="stat"><div class="label">High Risks</div><div class="value" style="color:var(--danger)">${stats.highRiskCount}</div></div>
     </div>
+    <div class="render-note">${escapeHtml(renderCoverageNote(rendered.info))}</div>
   </div>
 
   <!-- Coverage -->
   <div class="card half">
     <h2>Verification Coverage</h2>
     <div class="stat-row">
-      <div class="stat" title="Structural: syntax, schemas, types, lint."><div class="label">Tier 1 <span class="info-tip">?</span></div><div class="value" style="color:var(--accent)">${targetsByTier.structural}</div></div>
-      <div class="stat" title="Behavioral: workflow correctness, contracts, integrations."><div class="label">Tier 2 <span class="info-tip">?</span></div><div class="value" style="color:var(--warn)">${targetsByTier.behavioral}</div></div>
-      <div class="stat" title="Adversarial: concurrency, retries, race conditions, malformed state."><div class="label">Tier 3 <span class="info-tip">?</span></div><div class="value" style="color:var(--danger)">${targetsByTier.adversarial}</div></div>
+      <div class="stat" title="Structural: syntax, schemas, types, lint."><div class="label">Tier 1 <span class="info-tip">?</span></div><div class="value" style="color:var(--accent)">${stats.targetsByTier.structural}</div></div>
+      <div class="stat" title="Behavioral: workflow correctness, contracts, integrations."><div class="label">Tier 2 <span class="info-tip">?</span></div><div class="value" style="color:var(--warn)">${stats.targetsByTier.behavioral}</div></div>
+      <div class="stat" title="Adversarial: concurrency, retries, race conditions, malformed state."><div class="label">Tier 3 <span class="info-tip">?</span></div><div class="value" style="color:var(--danger)">${stats.targetsByTier.adversarial}</div></div>
     </div>
-    <div class="explain">Total directives: <strong>${payload.plan.targets.length}</strong></div>
+    <div class="explain">Total directives: <strong>${payload.plan?.targets?.length ?? 0}</strong></div>
     <div class="tier-legend">
       <span><span class="swatch" style="background:var(--accent)"></span>Structural</span>
       <span><span class="swatch" style="background:var(--warn)"></span>Behavioral</span>
@@ -439,18 +632,19 @@ function renderDashboard(payload: DashboardPayload): string {
       <span><span class="dot" style="background:var(--danger)"></span>High risk (impacted)</span>
       <span><span class="dot" style="background:var(--warn)"></span>Added in diff</span>
     </div>
+    <div class="render-note">${escapeHtml(renderCoverageNote(rendered.info))}</div>
   </div>
 
   <!-- Diff Viewer -->
   <div class="card half">
     <h2>Behavioral Diff</h2>
     <div class="stat-row">
-      <div class="stat"><div class="label">Added Nodes</div><div class="value" style="color:var(--ok)">+${payload.diff.addedNodes.length}</div></div>
-      <div class="stat"><div class="label">Removed</div><div class="value" style="color:var(--danger)">-${payload.diff.removedNodes.length}</div></div>
-      <div class="stat"><div class="label">Impacted</div><div class="value" style="color:var(--warn)">${payload.diff.impactedNodes.length}</div></div>
+      <div class="stat"><div class="label">Added Nodes</div><div class="value" style="color:var(--ok)">+${payload.diff?.addedNodes?.length ?? 0}</div></div>
+      <div class="stat"><div class="label">Removed</div><div class="value" style="color:var(--danger)">-${payload.diff?.removedNodes?.length ?? 0}</div></div>
+      <div class="stat"><div class="label">Impacted</div><div class="value" style="color:var(--warn)">${payload.diff?.impactedNodes?.length ?? 0}</div></div>
     </div>
     <details class="explain" style="margin-top:12px"><summary>Added node list</summary>
-      <div class="scroll">${payload.diff.addedNodes.map(n => `<div style="font-family:monospace;font-size:11px;color:var(--muted);padding:2px 0;">+ ${escapeHtml(n.label)} <span style="opacity:0.6">(${escapeHtml(n.id)})</span></div>`).join('')}</div>
+      <div class="scroll">${renderAddedNodeList(payload.diff?.addedNodes ?? [], limits.maxAddedNodeRows)}</div>
     </details>
   </div>
 
@@ -458,14 +652,14 @@ function renderDashboard(payload: DashboardPayload): string {
   <div class="card half">
     <h2>Unverified Assumptions</h2>
     <div class="scroll">
-      ${payload.confidence.unverifiedAssumptions.map(a => `<div class="assumption">${escapeHtml(a)}</div>`).join('') || '<div class="explain">None flagged.</div>'}
+      ${assumptions.map(a => `<div class="assumption">${escapeHtml(a)}</div>`).join('') || '<div class="explain">None flagged.</div>'}
     </div>
   </div>
 
   <!-- Confidence Explainability -->
   <div class="card half">
     <h2>Confidence Reasoning</h2>
-    <div class="explain">${payload.confidence.explanation.map(e => `<div style="margin-bottom:6px">• ${escapeHtml(e)}</div>`).join('')}</div>
+    <div class="explain">${explanation.map(e => `<div style="margin-bottom:6px">• ${escapeHtml(e)}</div>`).join('')}</div>
   </div>
 
   <!-- Risk Table -->
@@ -486,6 +680,7 @@ function renderDashboard(payload: DashboardPayload): string {
         <tbody id="riskBody"></tbody>
       </table>
     </div>
+    <div id="riskCapNote"></div>
   </div>
 
   <!-- Verification Targets -->
@@ -514,7 +709,7 @@ function renderDashboard(payload: DashboardPayload): string {
   <div class="card full">
     <h2>Execution Recommendations</h2>
     <ul style="margin:0; padding-left:18px; font-size:13px; line-height:1.7;">
-      ${payload.plan.executionRecommendations.map(r => `<li>${escapeHtml(r)}</li>`).join('')}
+      ${recommendations.map(r => `<li>${escapeHtml(r)}</li>`).join('')}
     </ul>
   </div>
 </div>
@@ -522,499 +717,158 @@ function renderDashboard(payload: DashboardPayload): string {
 <div id="toast" class="toast">Copied to clipboard</div>
 <div class="kb-hint">Esc: clear filter • Click workflow card or heatmap cell to filter</div>
 
+<script id="veris-payload" type="application/json">${serializeForScriptBlock(embedded)}</script>
+<script id="veris-config" type="application/json">${serializeForScriptBlock(pageConfig)}</script>
 <script>
-const PAYLOAD = ${json};
-
-// Header meta
-const m = PAYLOAD.meta || {};
-document.getElementById('metaLine').textContent =
-  'Diff mode: ' + (m.diffMode || 'n/a') +
-  (m.baseRef ? ' • base: ' + m.baseRef : '') +
-  (m.headRef ? ' • head: ' + m.headRef.substring(0,7) : '') +
-  (m.projectRoot ? ' • ' + m.projectRoot : '');
-(function renderGenTime(){
-  const raw = m.generatedAt || '';
-  const el = document.getElementById('genTime');
-  if (!raw) { el.textContent = ''; return; }
-  const d = new Date(raw);
-  if (isNaN(d.getTime())) { el.textContent = raw.replace('T',' ').replace(/\\..+/,''); return; }
-  // Use viewer's machine locale + tz. Falls back to UTC if Intl unavailable.
-  try {
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local';
-    const fmt = new Intl.DateTimeFormat(undefined, {
-      year: 'numeric', month: 'short', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit',
-      timeZoneName: 'short'
-    });
-    el.textContent = fmt.format(d);
-    el.title = 'Source (UTC): ' + raw + ' • Timezone: ' + tz;
-  } catch {
-    el.textContent = d.toISOString().replace('T',' ').replace(/\\..+/,'') + ' UTC';
-  }
-})();
-
-// Executive summary narrative
-(function buildHero(){
-  const conf = (PAYLOAD.confidence && PAYLOAD.confidence.overallConfidence) || 0;
-  const drift = PAYLOAD.drift || {};
-  const wf = (PAYLOAD.workflows && PAYLOAD.workflows.aggregates) || [];
-  const highRiskWF = wf.filter(w => w.maxRisk >= 50);
-  const probes = (PAYLOAD.probes || []).filter(p => p.severity === 'high').length;
-  const trend = PAYLOAD.confidenceTrend || [];
-  const trendDelta = trend.length >= 2 ? (trend[0].overallConfidence - trend[trend.length-1].overallConfidence) : 0;
-
-  let parts = [];
-  let verdict = conf >= 70 ? 'Healthy.' : conf >= 40 ? 'Caution.' : 'High risk.';
-  parts.push('<strong style="color:' + (conf>=70?'var(--ok)':conf>=40?'var(--warn)':'var(--danger)') + '">' + verdict + '</strong> Confidence ' + conf.toFixed(0) + '/100' +
-    (trend.length>=2 ? ' (' + (trendDelta>=0?'+':'') + trendDelta.toFixed(0) + ' vs first recorded run)' : '') + '.');
-  if (highRiskWF.length) parts.push(highRiskWF.length + ' workflow' + (highRiskWF.length===1?'':'s') + ' at elevated risk: <em>' + highRiskWF.slice(0,3).map(w=>esc(w.workflowName)).join(', ') + (highRiskWF.length>3?', ...':'') + '</em>.');
-  if (drift.summary) parts.push(esc(drift.summary));
-  if (probes) parts.push(probes + ' high-severity adversarial probe' + (probes===1?'':'s') + ' generated.');
-  parts.push('Read Affected Behaviors below, then jump to Adversarial Probes to copy directives for autonomous execution.');
-  document.getElementById('heroBody').innerHTML = parts.join(' ');
-})();
-
-// Export buttons
-function downloadBlob(filename, blob) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename; a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-document.getElementById('exportJsonBtn').addEventListener('click', () => {
-  const blob = new Blob([JSON.stringify(PAYLOAD, null, 2)], { type: 'application/json' });
-  downloadBlob('veris-dashboard-payload.json', blob);
-});
-document.getElementById('exportCsvBtn').addEventListener('click', () => {
-  const rows = [['type','workflow','tier','nodeId','field','value']];
-  (PAYLOAD.plan.targets||[]).forEach(t => rows.push(['target', nodeToWorkflow[t.nodeId]||'', t.tier, t.nodeId, 'directive', t.directive]));
-  (PAYLOAD.probes||[]).forEach(p => rows.push(['probe', p.workflowKind||'', p.category||'', p.nodeId, 'scenario', p.scenario]));
-  (PAYLOAD.risks||[]).forEach(r => rows.push(['risk', nodeToWorkflow[r.nodeId]||'', '', r.nodeId, 'overallRisk', String(r.score.overallRisk)]));
-  const csv = rows.map(r => r.map(c => '"' + String(c||'').replace(/"/g,'""') + '"').join(',')).join('\\n');
-  downloadBlob('veris-export.csv', new Blob([csv], { type: 'text/csv' }));
-});
-
-// Filter clear
-document.getElementById('clearFilterBtn').addEventListener('click', () => {
-  activeWorkflowFilter = null; applyWorkflowFilter(); renderWorkflows();
-});
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && activeWorkflowFilter) {
-    activeWorkflowFilter = null; applyWorkflowFilter(); renderWorkflows();
-  }
-});
-
-// Build node lookup sets
-const impactedSet = new Set((PAYLOAD.diff.impactedNodes || []).map(n => n.id));
-const addedSet = new Set((PAYLOAD.diff.addedNodes || []).map(n => n.id));
-const riskMap = {};
-(PAYLOAD.risks || []).forEach(r => { riskMap[r.nodeId] = r.score; });
-
-// Workflow indexes
-const WORKFLOWS = (PAYLOAD.workflows && PAYLOAD.workflows.aggregates) || [];
-const WF_DOMAINS = (PAYLOAD.workflows && PAYLOAD.workflows.workflows) || [];
-const nodeToWorkflow = {}; // nodeId -> workflowId
-WF_DOMAINS.forEach(d => { (d.memberNodeIds || []).forEach(id => { nodeToWorkflow[id] = d.id; }); });
-let activeWorkflowFilter = null;
-
-const wfColorPalette = ['#5b8def','#9b89ff','#6ad7c1','#ffb347','#c897f0','#ff8da1','#62c9ff','#a8e6cf','#ffd966','#f6a6b2','#7ed6df','#dcd6f7'];
-const workflowColors = {};
-WF_DOMAINS.forEach((d, i) => { workflowColors[d.id] = wfColorPalette[i % wfColorPalette.length]; });
-
-// Graph viz via vis-network — nodes colored by workflow when available
-const nodeTypeColorFallback = { 0: '#5b8def', 1: '#ffb347', 2: '#9b89ff', 3: '#6ad7c1', 4: '#c897f0' };
-function nodeColor(n) {
-  const wfId = nodeToWorkflow[n.id];
-  if (wfId && workflowColors[wfId]) return workflowColors[wfId];
-  return nodeTypeColorFallback[n.type] || '#9b89ff';
-}
-const visNodes = (PAYLOAD.graph.nodes || []).map(n => {
-  const risk = riskMap[n.id];
-  const color = nodeColor(n);
-  let borderColor = color;
-  if (risk && risk.overallRisk >= 50) { borderColor = '#ff5d6c'; }
-  if (addedSet.has(n.id)) { borderColor = '#ffb347'; }
-  const size = risk ? 12 + Math.min(risk.overallRisk / 4, 18) : 10;
-  const wfId = nodeToWorkflow[n.id];
-  const wfName = wfId ? (WF_DOMAINS.find(d => d.id === wfId) || {}).name : null;
-  return {
-    id: n.id,
-    label: n.label,
-    title: n.id + (wfName ? '\\nWorkflow: ' + wfName : '') + (risk ? '\\nRisk: ' + risk.overallRisk.toFixed(1) : ''),
-    color: { background: color, border: borderColor, highlight: { background: color, border: '#fff' } },
-    size: size,
-    font: { color: '#e6e8ec', size: 11 },
-    borderWidth: borderColor === color ? 1 : 3,
-    shape: 'dot',
-    _wf: wfId
-  };
-});
-const edgeTypeColor = { 'INVOKES': '#5b8def', 'DEPENDS_ON': '#3a3f4a', 'MUTATES': '#ff5d6c', 'SYNCHRONIZES': '#ffb347' };
-const visEdges = (PAYLOAD.graph.edges || []).map((e, i) => ({
-  id: i,
-  from: e.sourceId,
-  to: e.targetId,
-  arrows: 'to',
-  color: { color: edgeTypeColor[e.type] || '#3a3f4a', opacity: 0.5 },
-  width: e.type === 'INVOKES' ? 1.5 : 1
-}));
-const networkNodeDataSet = new vis.DataSet(visNodes);
-const networkEdgeDataSet = new vis.DataSet(visEdges);
-const network = new vis.Network(
-  document.getElementById('graph'),
-  { nodes: networkNodeDataSet, edges: networkEdgeDataSet },
-  {
-    physics: { stabilization: { iterations: 120 }, barnesHut: { gravitationalConstant: -8000, springLength: 120 } },
-    interaction: { hover: true, tooltipDelay: 100 },
-    layout: { improvedLayout: true }
-  }
-);
-
-// Render workflow hero cards
-function renderWorkflows() {
-  const grid = document.getElementById('workflowGrid');
-  if (!grid) return;
-  if (WORKFLOWS.length === 0) { grid.innerHTML = '<div class="explain">No workflows classified.</div>'; return; }
-  grid.innerHTML = WORKFLOWS.map(w => {
-    const riskCls = w.maxRisk >= 50 ? 'risk-high' : w.maxRisk >= 30 ? 'risk-med' : w.impactedCount > 0 ? 'risk-low' : 'untouched';
-    const active = activeWorkflowFilter === w.workflowId ? ' style="outline: 2px solid var(--accent); outline-offset: 2px;"' : '';
-    const signals = (WF_DOMAINS.find(d => d.id === w.workflowId) || {}).signals || [];
-    const sigStr = signals.slice(0, 6).map(s => s.source + ':' + s.value).join(' • ');
-    const runtimeRisksHtml = w.runtimeRisks && w.runtimeRisks.length > 0
-      ? '<ul class="risks-list">' + w.runtimeRisks.slice(0, 3).map(r => '<li>' + esc(r) + '</li>').join('') + '</ul>'
-      : '';
-    return '<div class="workflow-card ' + riskCls + '" data-wf="' + w.workflowId + '"' + active + '>' +
-      '<h3>' + esc(w.workflowName) + '</h3>' +
-      '<div class="narr">' + esc(w.narrative) + '</div>' +
-      '<div class="meta-row">' +
-        '<span>' + w.memberCount + ' nodes</span>' +
-        '<span style="color:var(--warn)">' + w.impactedCount + ' impacted</span>' +
-        '<span style="margin-left:auto" class="risk-num" title="Max risk">' + (w.maxRisk || 0).toFixed(0) + '</span>' +
-      '</div>' +
-      runtimeRisksHtml +
-      (sigStr ? '<div class="signals" title="Inference signals">' + esc(sigStr) + '</div>' : '') +
-    '</div>';
-  }).join('');
-  grid.querySelectorAll('.workflow-card').forEach(card => {
-    card.addEventListener('click', () => {
-      const wf = card.dataset.wf;
-      activeWorkflowFilter = (activeWorkflowFilter === wf) ? null : wf;
-      applyWorkflowFilter();
-      renderWorkflows();
-    });
-  });
-}
-
-function applyWorkflowFilter() {
-  const label = document.getElementById('graphFilterLabel');
-  const banner = document.getElementById('filterBanner');
-  const bname = document.getElementById('filterBannerName');
-  if (activeWorkflowFilter) {
-    const wf = WORKFLOWS.find(w => w.workflowId === activeWorkflowFilter);
-    const name = wf ? wf.workflowName : activeWorkflowFilter;
-    label.textContent = '— filtered to: ' + name;
-    bname.textContent = name;
-    banner.classList.add('active');
-    // hide non-matching nodes in graph
-    networkNodeDataSet.forEach(n => {
-      networkNodeDataSet.update({ id: n.id, hidden: n._wf !== activeWorkflowFilter });
-    });
-  } else {
-    label.textContent = '';
-    banner.classList.remove('active');
-    networkNodeDataSet.forEach(n => networkNodeDataSet.update({ id: n.id, hidden: false }));
-  }
-  // Propagate to risk + target tables
-  if (typeof renderRisks === 'function') renderRisks();
-  if (typeof renderTargets === 'function') renderTargets();
-}
-renderWorkflows();
-
-// Confidence Heatmap
-function renderHeatmap() {
-  const el = document.getElementById('heatmap'); if (!el) return;
-  if (WORKFLOWS.length === 0) { el.innerHTML = '<div class="explain">No workflows.</div>'; return; }
-  el.innerHTML = WORKFLOWS.map(w => {
-    const risk = w.maxRisk || 0;
-    const r = Math.min(255, Math.round(80 + (risk / 100) * 175));
-    const g = Math.max(60, Math.round(220 - (risk / 100) * 160));
-    const b = Math.max(60, Math.round(150 - (risk / 100) * 90));
-    const bg = 'rgb(' + r + ',' + g + ',' + b + ')';
-    return '<div class="heatcell" data-wf="' + w.workflowId + '" style="background:' + bg + '" title="' + esc(w.narrative) + '">' +
-      '<div class="lbl">' + esc(w.workflowName) + '</div>' +
-      '<div class="v">' + (w.maxRisk || 0).toFixed(0) + '</div>' +
-    '</div>';
-  }).join('');
-  el.querySelectorAll('.heatcell').forEach(c => {
-    c.addEventListener('click', () => {
-      const wf = c.dataset.wf;
-      activeWorkflowFilter = (activeWorkflowFilter === wf) ? null : wf;
-      applyWorkflowFilter();
-      renderWorkflows();
-    });
-  });
-}
-renderHeatmap();
-
-// Confidence trend
-function renderTrend() {
-  const svg = document.getElementById('trendChart'); if (!svg) return;
-  const trend = (PAYLOAD.confidenceTrend || []).slice().reverse(); // oldest -> newest
-  const note = document.getElementById('trendNote');
-  if (trend.length < 2) {
-    svg.innerHTML = '<text x="10" y="60" fill="#9aa3b2" font-size="12">Need more than one run to chart. Run again to see the trend.</text>';
-    note.textContent = trend.length === 1 ? '1 run on record.' : 'No history yet.';
-    return;
-  }
-  const W = 400, H = 120, pad = 8;
-  const step = (W - pad * 2) / (trend.length - 1);
-  const points = trend.map((r, i) => {
-    const x = pad + i * step;
-    const y = H - pad - (r.overallConfidence / 100) * (H - pad * 2);
-    return x + ',' + y;
-  }).join(' ');
-  const last = trend[trend.length - 1].overallConfidence;
-  const first = trend[0].overallConfidence;
-  svg.innerHTML =
-    '<polyline points="' + points + '" fill="none" stroke="#4f8cff" stroke-width="2"/>' +
-    '<line x1="0" y1="' + (H - pad) + '" x2="' + W + '" y2="' + (H - pad) + '" stroke="#2a2f3a"/>';
-  note.textContent = 'Trend over ' + trend.length + ' runs — last ' + last.toFixed(1) + ', first ' + first.toFixed(1) + ' (delta ' + (last - first).toFixed(1) + ').';
-}
-renderTrend();
-
-// Drift
-function renderDrift() {
-  const summary = document.getElementById('driftSummary');
-  const list = document.getElementById('driftList');
-  const drift = PAYLOAD.drift;
-  if (!drift || !drift.workflows || drift.workflows.length === 0) {
-    summary.textContent = 'No drift data yet (first run on record).';
-    list.innerHTML = '';
-    return;
-  }
-  summary.textContent = drift.summary;
-  list.innerHTML = drift.workflows.map(d => {
-    const cls = d.oscillationDetected ? 'oscillating' :
-                (d.changedSinceLastRun && d.memberChange === 0) ? 'silent' :
-                d.changedSinceLastRun ? 'changed' : '';
-    return '<div class="drift-item ' + cls + '">' + esc(d.narrative) + '</div>';
-  }).join('');
-}
-renderDrift();
-
-// Adversarial probes
-function renderProbes() {
-  const list = document.getElementById('probeList');
-  const probes = PAYLOAD.probes || [];
-  const filter = (document.getElementById('probeFilter').value || '').toLowerCase();
-  const sev = document.getElementById('probeSeverity').value;
-  const filtered = probes.filter(p =>
-    (p.nodeId.toLowerCase().includes(filter) || (p.workflowKind || '').toLowerCase().includes(filter)) &&
-    (!sev || p.severity === sev) &&
-    (!activeWorkflowFilter || p.workflowId === activeWorkflowFilter)
-  );
-  list.innerHTML = filtered.map((p, i) => {
-    return '<div class="probe-item severity-' + p.severity + '">' +
-      '<div><span class="cat">' + p.category + '</span><span class="cat">' + p.severity + '</span>' +
-      '<span style="font-family:monospace;font-size:11px;color:var(--muted)">' + esc(shortId(p.nodeId)) + '</span>' +
-      (p.workflowKind ? ' <span class="cat">' + esc(p.workflowKind) + '</span>' : '') +
-      '<button class="copy-btn" data-i="' + i + '" style="float:right">Copy</button></div>' +
-      '<div class="scen">' + esc(p.scenario) + '</div>' +
-      '<div class="inv">Expected invariant: ' + esc(p.expectedInvariant) + '</div>' +
-    '</div>';
-  }).join('') || '<div class="explain">No probes match.</div>';
-  list.querySelectorAll('.copy-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      const p = filtered[parseInt(btn.dataset.i, 10)];
-      const prompt = 'Veris adversarial probe [' + p.severity + ' / ' + p.category + '] for ' + p.nodeId + ':\\n' +
-                     'Scenario: ' + p.scenario + '\\n' +
-                     'Expected invariant: ' + p.expectedInvariant + '\\n\\n' +
-                     'Please design and execute a test that exercises this scenario, then report whether the invariant holds.';
-      copyToClipboard(prompt, btn);
-    });
-  });
-}
-document.getElementById('probeFilter').addEventListener('input', renderProbes);
-document.getElementById('probeSeverity').addEventListener('change', renderProbes);
-document.getElementById('copyAllProbes').addEventListener('click', () => {
-  const probes = PAYLOAD.probes || [];
-  const filter = (document.getElementById('probeFilter').value || '').toLowerCase();
-  const sev = document.getElementById('probeSeverity').value;
-  const filtered = probes.filter(p =>
-    (p.nodeId.toLowerCase().includes(filter) || (p.workflowKind || '').toLowerCase().includes(filter)) &&
-    (!sev || p.severity === sev) &&
-    (!activeWorkflowFilter || p.workflowId === activeWorkflowFilter)
-  );
-  const prompt = 'Veris adversarial probe batch (' + filtered.length + '):\\n\\n' +
-    filtered.map((p, i) => (i+1) + '. [' + p.severity + '/' + p.category + '] ' + p.nodeId + '\\n   Scenario: ' + p.scenario + '\\n   Invariant: ' + p.expectedInvariant).join('\\n\\n') +
-    '\\n\\nPlease design tests for each and report which invariants hold.';
-  copyToClipboard(prompt, document.getElementById('copyAllProbes'));
-});
-renderProbes();
-
-// Budget allocator (recomputed client-side using payload data for live what-if)
-const TIER_LEVERAGE = { 'Tier 1': 1, 'Tier 2': 3, 'Tier 3': 7 };
-const TIER_COST = { 'Tier 1': 5, 'Tier 2': 30, 'Tier 3': 120 };
-const WF_CRIT = { 'Payments': 2.0,'Authentication': 2.0,'Authorization': 1.8,'Webhooks': 1.8,'Billing': 1.7,'Checkout': 1.7,'Session': 1.6,'Persistence': 1.5,'Queue': 1.5,'Sync': 1.4,'Orchestration': 1.4,'Realtime': 1.3,'Caching': 1.2,'Notifications': 1.1,'AI': 1.5,'Routing': 1.4,'Cart': 1.2,'Search': 1.0,'Profile': 0.9,'Admin': 1.2,'Analytics': 0.8,'Onboarding': 1.0,'Reporting': 0.7,'Configuration': 0.7,'Infrastructure': 0.8,'Core': 1.0,'Uncategorized': 0.7 };
-function renderBudget() {
-  const minutes = parseInt(document.getElementById('budgetInput').value, 10) || 15;
-  const budgetSec = minutes * 60;
-  const targets = (PAYLOAD.plan.targets || []).slice();
-  const riskByNode = {}; (PAYLOAD.risks || []).forEach(r => { riskByNode[r.nodeId] = r.score.overallRisk; });
-  const wfByNode = {}; (WF_DOMAINS || []).forEach(d => { (d.memberNodeIds||[]).forEach(id => { wfByNode[id] = d; }); });
-  const scored = targets.map(t => {
-    const tierKey = t.tier.split(' - ')[0];
-    const tier = TIER_LEVERAGE[tierKey] || 1;
-    const cost = TIER_COST[tierKey] || 5;
-    const risk = riskByNode[t.nodeId] || 10;
-    const wf = wfByNode[t.nodeId];
-    const crit = wf ? (WF_CRIT[wf.kind] || 1) : 1;
-    return { ...t, _score: (tier * crit * (risk / 10)) / cost, _cost: cost, _wf: wf ? wf.name : '' };
-  }).sort((a,b) => b._score - a._score);
-  const selected = []; let used = 0;
-  for (const t of scored) { if (used + t._cost <= budgetSec) { selected.push(t); used += t._cost; } }
-  document.getElementById('budgetNarrative').textContent =
-    'Selected ' + selected.length + ' of ' + targets.length + ' targets, estimated ' + Math.round(used/60) + '/' + minutes + ' min.';
-  document.getElementById('budgetList').innerHTML = selected.slice(0, 200).map(t => {
-    const tierKey = t.tier.split(' - ')[0];
-    const cls = tierKey === 'Tier 1' ? 't1' : tierKey === 'Tier 2' ? 't2' : 't3';
-    return '<div class="budget-row">' +
-      '<span class="badge-tier ' + cls + '">' + tierKey + '</span>' +
-      '<span style="font-family:monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(t.nodeId) + '">' + esc(shortId(t.nodeId)) + '</span>' +
-      '<span style="color:var(--muted)">' + (t._wf || '-') + '</span>' +
-      '<span style="text-align:right;color:var(--muted)">' + t._cost + 's</span>' +
-    '</div>';
-  }).join('');
-}
-document.getElementById('recomputeBudget').addEventListener('click', renderBudget);
-document.getElementById('budgetInput').addEventListener('change', renderBudget);
-document.getElementById('copyBudgetPrompt').addEventListener('click', () => {
-  const minutes = parseInt(document.getElementById('budgetInput').value, 10) || 15;
-  const list = document.querySelectorAll('#budgetList .budget-row');
-  const lines = [];
-  list.forEach((row, i) => lines.push((i+1) + '. ' + row.children[1].textContent));
-  const prompt = 'Veris ' + minutes + '-minute verification plan (highest-leverage subset):\\n\\n' + lines.join('\\n') +
-    '\\n\\nPlease execute these in order, then report which passed and which failed via mcp__veris__report_execution.';
-  copyToClipboard(prompt, document.getElementById('copyBudgetPrompt'));
-});
-renderBudget();
-
-// Risk table
-function renderRisks() {
-  const filter = document.getElementById('riskFilter').value.toLowerCase();
-  const sortBy = document.getElementById('riskSort').value;
-  const sorters = {
-    risk: (a,b) => b.score.overallRisk - a.score.overallRisk,
-    blast: (a,b) => b.score.blastRadius - a.score.blastRadius,
-    frag: (a,b) => b.score.dependencyFragility - a.score.dependencyFragility,
-    crit: (a,b) => b.score.runtimeCriticality - a.score.runtimeCriticality
-  };
-  const filtered = (PAYLOAD.risks || []).filter(r =>
-    r.nodeId.toLowerCase().includes(filter) &&
-    (!activeWorkflowFilter || nodeToWorkflow[r.nodeId] === activeWorkflowFilter)
-  ).sort(sorters[sortBy]);
-  const body = document.getElementById('riskBody');
-  body.innerHTML = filtered.map(r => {
-    const cls = r.score.overallRisk >= 50 ? 'high' : r.score.overallRisk >= 30 ? 'med' : 'low';
-    return '<tr><td class="id" title="' + esc(r.nodeId) + '">' + esc(shortId(r.nodeId)) + '</td>' +
-           '<td><span class="pill ' + cls + '">' + r.score.overallRisk.toFixed(1) + '</span></td>' +
-           '<td>' + r.score.blastRadius + '</td>' +
-           '<td>' + r.score.runtimeCriticality + '</td>' +
-           '<td>' + r.score.dependencyFragility + '</td>' +
-           '<td>' + r.score.integrationCount + '</td></tr>';
-  }).join('');
-}
-document.getElementById('riskFilter').addEventListener('input', renderRisks);
-document.getElementById('riskSort').addEventListener('change', renderRisks);
-renderRisks();
-
-// Verification targets
-function renderTargets() {
-  const filter = document.getElementById('targetFilter').value.toLowerCase();
-  const tier = document.getElementById('tierFilter').value;
-  const pri = document.getElementById('priFilter').value;
-  const filtered = (PAYLOAD.plan.targets || []).filter(t =>
-    t.nodeId.toLowerCase().includes(filter) &&
-    (!tier || t.tier.startsWith(tier)) &&
-    (!pri || t.priority === pri) &&
-    (!activeWorkflowFilter || nodeToWorkflow[t.nodeId] === activeWorkflowFilter)
-  );
-  const list = document.getElementById('targetList');
-  list.innerHTML = filtered.map((t, i) => {
-    const tierCls = t.tier.startsWith('Tier 1') ? 't1' : t.tier.startsWith('Tier 2') ? 't2' : 't3';
-    const priCls = t.priority === 'High' ? 'high' : t.priority === 'Medium' ? 'med' : 'low';
-    return '<details>' +
-      '<summary style="display:flex;justify-content:space-between;align-items:center;gap:10px;">' +
-        '<span><span class="pill ' + tierCls + '">' + t.tier.split(' - ')[0] + '</span> ' +
-        '<span class="pill ' + priCls + '">' + t.priority + '</span> ' +
-        '<span style="font-family:monospace;font-size:11px;color:var(--muted);">' + esc(shortId(t.nodeId)) + '</span></span>' +
-        '<button class="copy-btn" data-i="' + i + '">Copy directive</button>' +
-      '</summary>' +
-      '<div class="explain" style="margin-top:8px">' + esc(t.directive) + '</div>' +
-      '</details>';
-  }).join('') || '<div class="explain">No matching targets.</div>';
-
-  list.querySelectorAll('.copy-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      const idx = parseInt(btn.dataset.i, 10);
-      const t = filtered[idx];
-      const prompt = 'Veris verification directive (' + t.tier + ', ' + t.priority + ' priority):\\n' +
-                     'Node: ' + t.nodeId + '\\n' +
-                     'Directive: ' + t.directive + '\\n\\n' +
-                     'Please execute or plan execution for this directive.';
-      copyToClipboard(prompt, btn);
-    });
-  });
-}
-document.getElementById('targetFilter').addEventListener('input', renderTargets);
-document.getElementById('tierFilter').addEventListener('change', renderTargets);
-document.getElementById('priFilter').addEventListener('change', renderTargets);
-renderTargets();
-
-document.getElementById('copyAll').addEventListener('click', () => {
-  const filter = document.getElementById('targetFilter').value.toLowerCase();
-  const tier = document.getElementById('tierFilter').value;
-  const pri = document.getElementById('priFilter').value;
-  const filtered = (PAYLOAD.plan.targets || []).filter(t =>
-    t.nodeId.toLowerCase().includes(filter) &&
-    (!tier || t.tier.startsWith(tier)) &&
-    (!pri || t.priority === pri) &&
-    (!activeWorkflowFilter || nodeToWorkflow[t.nodeId] === activeWorkflowFilter)
-  );
-  const prompt = 'Veris verification batch (' + filtered.length + ' directives):\\n\\n' +
-    filtered.map((t,i) => (i+1) + '. [' + t.tier + ' / ' + t.priority + '] ' + t.nodeId + '\\n   -> ' + t.directive).join('\\n\\n') +
-    '\\n\\nPlease execute these in order and report results.';
-  copyToClipboard(prompt, document.getElementById('copyAll'));
-});
-
-function copyToClipboard(text, btn) {
-  navigator.clipboard.writeText(text).then(() => {
-    const orig = btn.textContent;
-    btn.textContent = '✓ Copied';
-    btn.classList.add('done');
-    showToast();
-    setTimeout(() => { btn.textContent = orig; btn.classList.remove('done'); }, 1500);
-  }).catch(err => {
-    alert('Clipboard failed: ' + err);
-  });
-}
-function showToast() {
-  const t = document.getElementById('toast');
-  t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 1500);
-}
-function shortId(id) {
-  const parts = id.split('/');
-  return parts.slice(-2).join('/');
-}
-function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+${clientScript}
 </script>
 </body>
 </html>`;
 }
 
-function escapeHtml(s: string): string {
-    return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as any)[c]);
+// =====================================================================
+// Section 5 — filesystem IO
+// =====================================================================
+
+export class ReportingEngine {
+
+    private outputDir: string;
+    private projectRoot: string;
+
+    constructor(projectRoot: string) {
+        this.projectRoot = projectRoot;
+        this.outputDir = path.join(projectRoot, 'veris-reports');
+        if (!fs.existsSync(this.outputDir)) {
+            fs.mkdirSync(this.outputDir, { recursive: true });
+        }
+    }
+
+    public generateMarkdownReport(
+        diff: DiffReport,
+        risks: RiskReport[],
+        plan: VerificationPlan,
+        confidence: ConfidenceReport,
+        meta: ReportMeta = {}
+    ): string {
+        let md = `# Veris Executive Summary\n\n`;
+
+        if (meta.diffMode) {
+            md += `_Diff mode: **${meta.diffMode}**`;
+            if (meta.baseRef && meta.headRef) md += ` (${meta.baseRef} -> ${meta.headRef})`;
+            md += `_\n\n`;
+        }
+
+        md += `## 1. Repository Health & Confidence\n\n`;
+        md += `- **Overall Confidence Score:** ${confidence.overallConfidence}/100\n`;
+        md += `- **Execution Depth:** ${confidence.executionDepth}%\n\n`;
+
+        if (confidence.explanation.length > 0) {
+            md += `### Confidence Explainability\n\n`;
+            confidence.explanation.forEach(e => md += `- ${e}\n`);
+            md += `\n`;
+        }
+
+        if (confidence.unverifiedAssumptions.length > 0) {
+            md += `### Unverified Assumptions (Runtime Risks)\n\n`;
+            confidence.unverifiedAssumptions.forEach(u => md += `- ${u}\n`);
+            md += `\n`;
+        }
+
+        md += `## 2. Behavioral Diff & Workflow Risk Map\n\n`;
+        md += `- **Added Nodes:** ${diff.addedNodes.length}\n`;
+        md += `- **Removed Nodes:** ${diff.removedNodes.length}\n`;
+        md += `- **Added Edges:** ${diff.addedEdges.length}\n`;
+        md += `- **Removed Edges:** ${diff.removedEdges.length}\n`;
+        md += `- **Impacted Workflows/Nodes:** ${diff.impactedNodes.length}\n\n`;
+
+        if (risks.length > 0) {
+            md += `### Top Risk Factors\n\n`;
+            const sortedRisks = [...risks].sort((a, b) => b.score.overallRisk - a.score.overallRisk).slice(0, 5);
+            sortedRisks.forEach(r => {
+                md += `#### Node: \`${r.nodeId}\`\n\n`;
+                md += `- **Risk Score:** ${r.score.overallRisk.toFixed(2)} (Blast Radius: ${r.score.blastRadius}, Fragility: ${r.score.dependencyFragility})\n`;
+                r.score.explanation.forEach(exp => md += `- ${exp}\n`);
+                md += `\n`;
+            });
+        }
+
+        md += `## 3. Verification Coverage & Directives\n\n`;
+        md += `- **Total Verification Targets:** ${plan.targets.length}\n\n`;
+        md += `### Execution Recommendations\n\n`;
+        plan.executionRecommendations.forEach(rec => md += `- ${rec}\n`);
+        md += `\n`;
+
+        const mdPath = path.join(this.outputDir, 'veris-report.md');
+        fs.writeFileSync(mdPath, md, 'utf8');
+        return mdPath;
+    }
+
+    /**
+     * Generates a single-file interactive HTML dashboard.
+     *
+     * The page embeds its payload as JSON and its browser runtime inline; the one
+     * external request is the pinned, integrity-checked vis-network bundle, and
+     * the page renders everything except the graph without it.
+     *
+     * Rendering is capped (see DEFAULT_RENDER_LIMITS) and every cap is stated in
+     * the page, so a monorepo produces a legible partial view rather than a file
+     * too large to open.
+     */
+    public generateDashboard(payload: DashboardPayload, options: RenderDashboardOptions = {}): string {
+        const htmlPath = path.join(this.outputDir, 'veris-dashboard.html');
+        const html = renderDashboard(payload, {
+            ...options,
+            budget: options.budget ?? loadRiskConfig(this.projectRoot).budget,
+        });
+        fs.writeFileSync(htmlPath, html, 'utf8');
+        return htmlPath;
+    }
+
+    /**
+     * Kept for backwards compatibility. Re-uses old markdown -> HTML for simple consumers.
+     */
+    public generateHtmlReport(mdContent: string): string {
+        const body = this.renderMarkdown(mdContent);
+        const html = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Veris Report</title>
+<style>body{font-family:-apple-system,sans-serif;max-width:900px;margin:auto;padding:20px;line-height:1.6;}</style>
+</head><body>${body}</body></html>`;
+        const htmlPath = path.join(this.outputDir, 'veris-report.html');
+        fs.writeFileSync(htmlPath, html, 'utf8');
+        return htmlPath;
+    }
+
+    private renderMarkdown(md: string): string {
+        const lines = md.split(/\r?\n/);
+        const out: string[] = [];
+        let inList = false;
+        const closeList = () => { if (inList) { out.push('</ul>'); inList = false; } };
+        // Escape before applying inline markup: the markdown carries node ids and
+        // explanations built from analysed source, and this converter emits raw
+        // HTML. The inline patterns key off backticks, asterisks and underscores,
+        // none of which escaping touches, so the order is safe.
+        const inline = (s: string) => escapeHtml(s)
+            .replace(/`([^`]+)`/g, '<code>$1</code>')
+            .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+            .replace(/_([^_]+)_/g, '<em>$1</em>');
+
+        for (const raw of lines) {
+            const line = raw.trimEnd();
+            if (/^####\s+/.test(line)) { closeList(); out.push(`<h4>${inline(line.replace(/^####\s+/, ''))}</h4>`); continue; }
+            if (/^###\s+/.test(line))  { closeList(); out.push(`<h3>${inline(line.replace(/^###\s+/, ''))}</h3>`); continue; }
+            if (/^##\s+/.test(line))   { closeList(); out.push(`<h2>${inline(line.replace(/^##\s+/, ''))}</h2>`); continue; }
+            if (/^#\s+/.test(line))    { closeList(); out.push(`<h1>${inline(line.replace(/^#\s+/, ''))}</h1>`); continue; }
+            if (/^-\s+/.test(line))    {
+                if (!inList) { out.push('<ul>'); inList = true; }
+                out.push(`<li>${inline(line.replace(/^-\s+/, ''))}</li>`);
+                continue;
+            }
+            if (line.trim() === '') { closeList(); continue; }
+            closeList();
+            out.push(`<p>${inline(line)}</p>`);
+        }
+        closeList();
+        return out.join('\n');
+    }
 }
