@@ -10,3 +10,6 @@ coverage/
 .claude/
 
 .veris/
+
+# Browser-automation artifacts from dashboard verification runs
+.playwright-mcp/
