@@ -3,7 +3,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { CrossRepoRegistry } from '../../src/persistence/CrossRepoRegistry';
-import { VerisState, RunRecord } from '../../src/persistence/VerisState';
+import { VerisState, RunRecord, isStateAvailable } from '../../src/persistence/VerisState';
+
+// Only the snapshot tests need a real database. better-sqlite3 is an optional native
+// dependency and Veris runs without it, so these skip rather than fail when it is
+// absent — the registry's own behaviour (path validation, malformed files, missing
+// repos) is covered by the suites below, which need no binding at all.
+const withState = isStateAvailable() ? describe : describe.skip;
 
 const tmpDirs: string[] = [];
 
@@ -78,7 +84,7 @@ describe('CrossRepoRegistry construction', () => {
     });
 });
 
-describe('CrossRepoRegistry.snapshot', () => {
+withState('CrossRepoRegistry.snapshot', () => {
     it('creates no .veris directory in a registered repo (D6)', () => {
         const dir = registryHome();
         const repo = makeRepo();

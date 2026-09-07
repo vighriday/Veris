@@ -1,7 +1,41 @@
-import Database from 'better-sqlite3';
+import type DatabaseType from 'better-sqlite3';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+
+/**
+ * better-sqlite3 is a native module and an OPTIONAL dependency, so it is required
+ * lazily rather than imported statically.
+ *
+ * It has no prebuilt binary for every Node/platform combination — Windows on a
+ * newer Node minor is a common miss — and without one, installation falls back to a
+ * source build that needs a C++ toolchain most users do not have. A static import
+ * would throw at module load, taking down analysis that does not need persistence
+ * at all. Veris' core value is the graph and the diff; history is an enhancement.
+ *
+ * When the binding is unavailable every write becomes a no-op and every read
+ * returns empty, which is the same contract as VERIS_STATE_DISABLED=1.
+ */
+type DatabaseCtor = typeof DatabaseType;
+
+let cachedCtor: DatabaseCtor | null | undefined;
+
+function loadDatabaseCtor(): DatabaseCtor | null {
+    if (cachedCtor !== undefined) return cachedCtor;
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const mod = require('better-sqlite3');
+        cachedCtor = (mod?.default ?? mod) as DatabaseCtor;
+    } catch {
+        cachedCtor = null;
+    }
+    return cachedCtor;
+}
+
+/** True when persistence is available in this environment. */
+export function isStateAvailable(): boolean {
+    return loadDatabaseCtor() !== null;
+}
 
 /**
  * Veris state layer — local SQLite at .veris/state.db.
@@ -167,7 +201,7 @@ const SCHEMA_V1: string[] = [
  * existing database, so the previous scheme would have hard-crashed every existing
  * user the first time a column was added.
  */
-const MIGRATIONS: Array<{ to: number; up: (db: Database.Database) => void }> = [
+const MIGRATIONS: Array<{ to: number; up: (db: DatabaseType.Database) => void }> = [
     {
         to: 2,
         up: (db) => {
@@ -238,6 +272,21 @@ const MIGRATIONS: Array<{ to: number; up: (db: Database.Database) => void }> = [
 
 const GENESIS_HASH = '0'.repeat(64);
 
+/**
+ * Field separator for the evidence row hash.
+ *
+ * A NUL, not a space: none of the joined values can contain one, so field
+ * boundaries are unforgeable. With a space, a `directive` ending in a space and a
+ * `producer` beginning with one could shift the boundary and let two materially
+ * different rows hash identically — which is the one property a tamper-evident
+ * chain must not have.
+ *
+ * Written as an escape rather than a literal control character so the source stays
+ * plain ASCII; a raw NUL makes the file read as binary to grep, diffs and review
+ * tools. The runtime value is unchanged, so existing chains still verify.
+ */
+const NUL_SEPARATOR = '\u0000';
+
 function hashEvidenceRow(
     row: {
         runId: string; nodeId: string; workflowId: string | null; tier: string;
@@ -252,7 +301,7 @@ function hashEvidenceRow(
         prevHash, row.runId, row.nodeId, row.workflowId ?? '', row.tier, row.directive,
         row.result, row.detail ?? '', String(row.durationMs ?? ''), row.executedAt,
         row.producer, row.trustClass
-    ].join(' ');
+    ].join(NUL_SEPARATOR);
     return crypto.createHash('sha256').update(payload).digest('hex');
 }
 
@@ -266,7 +315,7 @@ export interface VerisStateOptions {
 }
 
 export class VerisState {
-    private db: Database.Database | null = null;
+    private db: DatabaseType.Database | null = null;
     public readonly enabled: boolean;
     public readonly dbPath: string;
     public readonly readOnly: boolean;
@@ -287,6 +336,13 @@ export class VerisState {
         }
 
         try {
+            const Database = loadDatabaseCtor();
+            if (!Database) {
+                // Optional native dependency absent. Analysis continues without
+                // history rather than failing; see the note at the top of this file.
+                console.error('[veris-state] better-sqlite3 unavailable — running without persistence.');
+                return;
+            }
             this.db = new Database(this.dbPath, this.readOnly ? { readonly: true } : {});
             if (!this.readOnly) {
                 this.db.pragma('journal_mode = WAL');
@@ -341,6 +397,19 @@ export class VerisState {
                 return;
             }
         }
+    }
+
+    /**
+     * True only when a database handle actually exists.
+     *
+     * `enabled` records what the caller asked for; `active` records what happened.
+     * They differ when the optional native binding is unavailable — the caller wanted
+     * persistence and did not get it — and reporting a state file that is not being
+     * written is exactly the kind of confident-but-wrong output this project exists
+     * to stop producing.
+     */
+    public get active(): boolean {
+        return this.db !== null;
     }
 
     public close(): void {

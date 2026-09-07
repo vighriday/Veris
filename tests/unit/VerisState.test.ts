@@ -1,9 +1,23 @@
 import { describe, it, expect, afterAll } from 'vitest';
-import Database from 'better-sqlite3';
 import * as fs from 'fs';
 import * as path from 'path';
-import { VerisState } from '../../src/persistence/VerisState';
+import { VerisState, isStateAvailable } from '../../src/persistence/VerisState';
 import { tmpDir, cleanupAll } from './tmpRepo';
+
+// better-sqlite3 is an optional native dependency: it has no prebuilt binary for
+// every Node/platform pair, and Veris deliberately runs without persistence when it
+// is missing. These tests exercise persistence, so they only apply when it is
+// present. Skipping is honest here; asserting would test the environment, not Veris.
+const withState = isStateAvailable() ? describe : describe.skip;
+
+// Required lazily for the same reason the source does: a static import throws at
+// module load when the optional binding is absent, which would fail the whole file
+// before `describe.skip` could take effect.
+function openRaw(dbPath: string, opts: Record<string, unknown> = {}) {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const Database = require('better-sqlite3');
+    return new Database(dbPath, opts);
+}
 
 afterAll(cleanupAll);
 
@@ -24,7 +38,7 @@ function execution(over: Partial<Parameters<VerisState['recordExecution']>[0]> =
     };
 }
 
-describe('VerisState — evidence is append-only', () => {
+withState('VerisState — evidence is append-only', () => {
     // Finding D2: executions were keyed (run_id, node_id, tier) and written with
     // INSERT OR REPLACE, with one run id per process. An agent could post `fail`,
     // then post `pass` for the same target, and the failure was gone. That is a
@@ -69,7 +83,7 @@ describe('VerisState — evidence is append-only', () => {
     });
 });
 
-describe('VerisState — the chain detects tampering', () => {
+withState('VerisState — the chain detects tampering', () => {
     it('verifies an untouched chain', () => {
         const { state } = newState();
         for (let i = 0; i < 5; i++) state.recordExecution(execution({ nodeId: `src/a.ts::n${i}` }));
@@ -86,7 +100,7 @@ describe('VerisState — the chain detects tampering', () => {
         state.close();
 
         const dbPath = path.join(root, '.veris', 'state.db');
-        const raw = new Database(dbPath);
+        const raw = openRaw(dbPath);
         // Flip a recorded pass into a failure — the edit an attacker would actually
         // make. It must differ from the stored value, or the UPDATE is a no-op and
         // the test proves nothing.
@@ -107,7 +121,7 @@ describe('VerisState — the chain detects tampering', () => {
         state.close();
 
         const dbPath = path.join(root, '.veris', 'state.db');
-        const raw = new Database(dbPath);
+        const raw = openRaw(dbPath);
         raw.prepare(`DELETE FROM evidence WHERE seq = 2`).run();
         raw.close();
 
@@ -117,7 +131,7 @@ describe('VerisState — the chain detects tampering', () => {
     });
 });
 
-describe('VerisState — schema migration', () => {
+withState('VerisState — schema migration', () => {
     // Finding E2: migrate() was `CREATE TABLE IF NOT EXISTS` plus a comment, which is
     // a no-op on an existing database. Adding a column and bumping the version would
     // have hard-crashed every existing user with no recovery but deleting history.
@@ -128,7 +142,7 @@ describe('VerisState — schema migration', () => {
         const dbPath = path.join(dir, 'state.db');
 
         // Reconstruct a v1 database exactly as the previous release wrote one.
-        const legacy = new Database(dbPath);
+        const legacy = openRaw(dbPath);
         legacy.exec(`
             CREATE TABLE schema_version (version INTEGER PRIMARY KEY);
             INSERT INTO schema_version (version) VALUES (1);
@@ -157,7 +171,7 @@ describe('VerisState — schema migration', () => {
         expect(state.verifyEvidenceChain().ok).toBe(true);
         state.close();
 
-        const check = new Database(dbPath, { readonly: true });
+        const check = openRaw(dbPath, { readonly: true });
         const version = (check.prepare('SELECT version FROM schema_version').get() as any).version;
         expect(version).toBe(2);
         // Finding E3: learned_signals had zero rows and zero callers in the codebase.
@@ -170,13 +184,13 @@ describe('VerisState — schema migration', () => {
         const { root, state } = newState();
         state.recordExecution(execution());
         state.close();
-        const check = new Database(path.join(root, '.veris', 'state.db'), { readonly: true });
+        const check = openRaw(path.join(root, '.veris', 'state.db'), { readonly: true });
         expect((check.prepare('SELECT version FROM schema_version').get() as any).version).toBe(2);
         check.close();
     });
 });
 
-describe('VerisState — read-only mode', () => {
+withState('VerisState — read-only mode', () => {
     // Finding D6: the constructor called mkdirSync(recursive), so a read-shaped
     // cross-repo snapshot created .veris/ in every registered repository and could
     // recreate directory trees the user had deliberately deleted.
@@ -201,7 +215,7 @@ describe('VerisState — read-only mode', () => {
     });
 });
 
-describe('VerisState — disabled mode', () => {
+withState('VerisState — disabled mode', () => {
     it('is inert and creates nothing when disabled', () => {
         const root = tmpDir('veris-disabled-');
         const state = new VerisState(root, { enabled: false });
@@ -213,7 +227,7 @@ describe('VerisState — disabled mode', () => {
     });
 });
 
-describe('VerisState — node risk history', () => {
+withState('VerisState — node risk history', () => {
     // Finding E3: node_history held 709 rows on the real repository that nothing
     // queried, while the node_history MCP tool promised risk over time.
     it('returns the risk trajectory it records', () => {

@@ -174,7 +174,16 @@ function runDoctor(targetDir: string) {
             ? 'none present'
             : `${pluginCount} present, ${pluginsEnabled ? 'ENABLED via VERIS_ENABLE_PLUGINS' : 'disabled (pass --allow-plugins to execute)'}`
     });
-    out.push({ check: 'better-sqlite3', ok: !!safeRequire('better-sqlite3'), detail: safeRequire('better-sqlite3') ? 'available' : 'missing (npm install)' });
+    // Optional: a missing native binding means no history, not a broken install, so
+    // it must not read as a failed check.
+    const sqlite = !!safeRequire('better-sqlite3');
+    out.push({
+        check: 'better-sqlite3 (optional)',
+        ok: true,
+        detail: sqlite
+            ? 'available — run history and drift enabled'
+            : 'not installed — analysis works, history and drift disabled'
+    });
     out.push({ check: 'ts-morph', ok: !!safeRequire('ts-morph'), detail: safeRequire('ts-morph') ? 'available' : 'missing (npm install)' });
 
     console.log(`Veris doctor — ${out.filter(x => x.ok).length}/${out.length} checks passed`);
@@ -430,7 +439,11 @@ async function analyzeOnce(args: CliArgs) {
         console.log(`Reports generated:`);
         console.log(`- Markdown: ${mdPath}`);
         console.log(`- Interactive dashboard: ${dashboardPath}`);
-        if (state.enabled) console.log(`- State: ${state.dbPath}`);
+        if (state.active) {
+            console.log(`- State: ${state.dbPath}`);
+        } else if (state.enabled) {
+            console.log(`- State: not written (better-sqlite3 unavailable) — history and drift disabled this run`);
+        }
 
         state.close();
 

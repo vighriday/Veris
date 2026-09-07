@@ -15,9 +15,14 @@ jobs:
         node: ['18', '20', '22']
         os: [ubuntu-latest]
         include:
-          # better-sqlite3 is a native module and Veris ships a Windows-specific
-          # MAX_PATH fallback in the git worktree path. Linux-only CI could not
-          # catch a regression in either.
+          # Veris ships a Windows-specific MAX_PATH fallback in the git worktree path,
+          # which Linux-only CI could never exercise.
+          #
+          # better-sqlite3 has no prebuilt binary for every Node/Windows pair and the
+          # runner has no C++ toolchain, so it is an optionalDependency: npm skips it
+          # rather than failing the install, and Veris runs without persistence. This
+          # job therefore also proves the no-persistence path works end to end, which
+          # is the same path a user on an unsupported platform gets.
           - node: '20'
             os: windows-latest
     runs-on: ${{ matrix.os }}
@@ -38,6 +43,15 @@ jobs:
 
       - name: Install
         run: npm ci
+
+      - name: Report whether optional persistence is available
+        shell: bash
+        run: |
+          if [ -d node_modules/better-sqlite3 ]; then
+            echo "better-sqlite3 present — persistence tests will run"
+          else
+            echo "better-sqlite3 absent — exercising the no-persistence path"
+          fi
 
       - name: Typecheck
         run: npx tsc --noEmit

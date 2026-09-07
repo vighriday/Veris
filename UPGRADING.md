@@ -200,6 +200,26 @@ Absolute values are not comparable with 2.x. Relative ordering is more meaningfu
 
 ---
 
+### 9. `better-sqlite3` is now an optional dependency
+
+**Was:** a hard dependency. Installing on a platform with no prebuilt binary fell back
+to a source build requiring a C++ toolchain, so `npm install` failed outright.
+**Now:** optional. npm skips it when it cannot be built, and Veris runs without
+persistence.
+
+Analysis, risk, workflows, probes and the reports all work either way. What is lost
+without it is run history, drift detection across runs, and `confidence_history`.
+
+`veris doctor` reports which mode you are in, and a run that cannot persist says so
+rather than naming a state file it did not write. To force persistence on, install it
+explicitly:
+
+```bash
+npm install better-sqlite3
+```
+
+---
+
 ## Behaviour that is simply better
 
 No action needed, but worth knowing what changed under you:

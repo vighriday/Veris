@@ -599,7 +599,7 @@ export class VerisMcpServer {
         return this.text({
             runCount: trend.length,
             limit,
-            stateEnabled: this.state.enabled,
+            stateEnabled: this.state.active,
             trend
         });
     }
