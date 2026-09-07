@@ -1,4 +1,5 @@
 import { describe, it, expect, afterAll } from 'vitest';
+import * as path from 'path';
 import { GitDiffDriver, BaselineError } from '../../src/engine/GitDiffDriver';
 import { initRepo, commitAll, writeFile, git, tmpDir, cleanupAll } from './tmpRepo';
 
@@ -168,5 +169,54 @@ describe('GitDiffDriver — provenance', () => {
         expect(before?.bodyHash).toBeDefined();
         expect(after?.bodyHash).toBeDefined();
         expect(before!.bodyHash).not.toBe(after!.bodyHash);
+    });
+});
+
+describe('GitDiffDriver — path spelling', () => {
+    // Windows CI caught this: `path.relative(gitRoot, projectRoot)` subtracts two
+    // strings that can describe the same directory in non-subtractable forms. Git
+    // returns a long, symlink-resolved, forward-slashed path; the analysis root may
+    // be an 8.3 short name (C:\Users\RUNNER~1\...) or an unresolved macOS symlink
+    // (/var vs /private/var). The difference came out as `../../..`, the base
+    // analysis read the wrong directory, and the base graph was EMPTY — which reads
+    // downstream as "every behavior was just added".
+    //
+    // Deriving the prefix from `git rev-parse --show-prefix` removes the arithmetic.
+    it('analyzes the repository root when the path is spelled unusually', () => {
+        const root = initRepo();
+        writeFile(root, 'src/target.ts', 'export class Target {}');
+        writeFile(root, 'src/user.ts', `import { Target } from './target'; export class User { use() {} }`);
+        commitAll(root, 'two files');
+        writeFile(root, 'src/extra.ts', 'export function extra() {}');
+        commitAll(root, 'extra');
+
+        // A trailing separator and a redundant `.` segment describe the same
+        // directory but do not subtract cleanly from git's canonical form.
+        const awkward = path.join(root, '.', path.sep);
+        const snap = new GitDiffDriver(awkward).snapshot('HEAD~1');
+
+        expect(snap.baseGraph.getNodes().length).toBeGreaterThan(0);
+        const baseImports = snap.baseGraph.getEdges().filter(e =>
+            e.sourceId === 'src/user.ts::User' && e.targetId === 'src/target.ts::Target');
+        expect(baseImports.length).toBeGreaterThan(0);
+    });
+
+    it('scopes analysis to a subdirectory when pointed at one', () => {
+        const root = initRepo();
+        writeFile(root, 'packages/app/src/a.ts', 'export function inApp() {}');
+        writeFile(root, 'other/b.ts', 'export function elsewhere() {}');
+        commitAll(root, 'monorepo layout');
+        writeFile(root, 'packages/app/src/c.ts', 'export function alsoInApp() {}');
+        commitAll(root, 'add to app');
+
+        const snap = new GitDiffDriver(path.join(root, 'packages', 'app')).snapshot('HEAD~1');
+        const ids = snap.headGraph.getNodes().map(n => n.id);
+
+        expect(ids.some(id => id.includes('inApp'))).toBe(true);
+        // The sibling package is outside the analysis root and must not appear at all,
+        // in either graph — otherwise it shows up as unrelated removed behavior.
+        expect(ids.some(id => id.includes('elsewhere'))).toBe(false);
+        expect(snap.baseGraph.getNodes().some(n => n.id.includes('elsewhere'))).toBe(false);
+        expect(snap.baseGraph.getNodes().some(n => n.id.includes('inApp'))).toBe(true);
     });
 });

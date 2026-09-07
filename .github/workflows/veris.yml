@@ -12,6 +12,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Vitest 4 imports `styleText` from node:util, which is Node 20+. Veris itself
+        # runs on Node 18 (see package.json engines), so 18 is still in the matrix and
+        # still has to build, analyze a real repository and serve MCP — it just skips
+        # the unit-test steps, which are a dev-tooling constraint rather than a
+        # runtime one. Dropping 18 entirely would quietly stop testing a version we
+        # claim to support.
         node: ['18', '20', '22']
         os: [ubuntu-latest]
         include:
@@ -57,9 +63,11 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Unit tests
+        if: matrix.node != '18'
         run: npm test
 
       - name: Coverage
+        if: matrix.node != '18'
         run: npm run test:coverage
 
       - name: Build
@@ -93,6 +101,8 @@ jobs:
           if [ "$dash_bytes" -gt 10000000 ]; then echo "dashboard exceeds 10MB"; exit 1; fi
           if [ "$md_bytes" -gt 1000000 ]; then echo "markdown report exceeds 1MB"; exit 1; fi
 
+      # Runs on every entry including Node 18: this is the real runtime contract, and
+      # it asserts the whole tool surface rather than merely starting the server.
       - name: MCP integration check
         run: npx ts-node tests/test-mcp-deep.ts
         timeout-minutes: 5

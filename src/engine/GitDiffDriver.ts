@@ -153,6 +153,21 @@ export class GitDiffDriver {
     }
 
     /**
+     * Path of the analysis root relative to the repository root, POSIX-separated,
+     * with no trailing slash. Empty when analyzing the repository root.
+     *
+     * Straight from git, so it is correct regardless of how the caller spelled the
+     * path: short names, symlinks, drive-letter case, trailing separators.
+     */
+    private repoPrefix(): string {
+        // git always emits POSIX separators here, so only the trailing slash needs
+        // removing — no separator normalization required.
+        const raw = this.gitQuiet(['rev-parse', '--show-prefix']);
+        if (raw === null) return '';
+        return raw.trim().replace(/\/+$/, '');
+    }
+
+    /**
      * Builds both snapshots. Throws `BaselineError` rather than returning null — a
      * caller must not be able to proceed with no baseline by ignoring a return value.
      */
@@ -178,9 +193,16 @@ export class GitDiffDriver {
         // Scope the base analysis to the same subpath the user pointed at, so running
         // `veris .` inside a subfolder of a larger repo does not pull the whole parent
         // tree into the diff.
-        const rootAbs = this.gitRoot();
-        const projAbs = path.resolve(this.projectRoot);
-        const subPath = rootAbs ? path.relative(rootAbs, projAbs) : '';
+        //
+        // Ask git for the prefix rather than computing path.relative(gitRoot, cwd).
+        // Those two strings can describe the same directory in forms that do not
+        // subtract: `git rev-parse --show-toplevel` returns a long, forward-slashed,
+        // symlink-resolved path, while the analysis root can be a Windows 8.3 short
+        // name or an unresolved macOS symlink (/var vs /private/var). The subtraction
+        // then yields something like `../../..`, the base analysis looks in the wrong
+        // directory, and the base graph comes back EMPTY — which reads downstream as
+        // "everything was just added". Caught by Windows CI.
+        const subPath = this.repoPrefix();
 
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'veris-worktree-'));
         let baseGraph: BehavioralGraph;
@@ -207,9 +229,15 @@ export class GitDiffDriver {
                 baseGraph = new BehavioralGraph();
                 baseStats = emptyStats();
             } else {
+                // `trackedFiles` runs with cwd = the analysis root and passes `-- .`, so
+                // git already returns paths relative to that directory — the same form
+                // `includeOnly` expects and the same form the head side uses. Stripping
+                // a repo-root prefix here removed one that was never present, leaving an
+                // empty include set and therefore an EMPTY BASE GRAPH for anyone running
+                // Veris inside a monorepo subdirectory: every behavior read as newly
+                // added, every run.
                 const baseTracked = this.trackedFiles(resolution.mergeBase);
-                const scopedBase = subPath ? reroot(baseTracked, subPath) : baseTracked;
-                const baseIntel = new RepositoryIntelligenceEngine(baseAnalysisRoot, undefined, { includeOnly: scopedBase });
+                const baseIntel = new RepositoryIntelligenceEngine(baseAnalysisRoot, undefined, { includeOnly: baseTracked });
                 const baseReport = baseIntel.analyze();
                 // No path rewriting: `filePath` is relative to the analysis root on both
                 // sides, so the same file yields the same node id in the worktree and in
@@ -241,16 +269,6 @@ export class GitDiffDriver {
             headStats: headReport.stats
         };
     }
-}
-
-/** Re-express repo-root-relative tracked paths as analysis-root-relative. */
-function reroot(paths: Set<string>, subPath: string): Set<string> {
-    const prefix = subPath.replace(/\\/g, '/').replace(/\/$/, '') + '/';
-    const out = new Set<string>();
-    for (const p of paths) {
-        if (p.startsWith(prefix)) out.add(p.slice(prefix.length));
-    }
-    return out;
 }
 
 function emptyStats(): AnalysisStats {
