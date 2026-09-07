@@ -5,21 +5,20 @@ import * as path from 'path';
 import { RepositoryIntelligenceEngine } from './RepositoryIntelligenceEngine';
 import { BehavioralGraphEngine } from './BehavioralGraphEngine';
 import { BehavioralGraph } from '../models/GraphModels';
-
-export interface GitDiffSnapshots {
-    baseGraph: BehavioralGraph;
-    headGraph: BehavioralGraph;
-    baseRef: string;
-    headRef: string;
-}
+import { AnalysisStats } from '../models/EntityModels';
+import { RepositoryIntelligenceReport } from '../models/EntityModels';
 
 /**
- * Produces two real behavioral graph snapshots from two git refs via worktree.
- * Falls back to synthetic diff when not in a git repo or no base ref exists.
+ * Produces two real behavioral graph snapshots from two git states via worktree.
+ *
+ * There is no synthetic fallback. When a baseline cannot be established the run
+ * fails with a reason: a verification tool that fabricates the thing it is
+ * verifying against is worse than one that refuses to answer.
  *
  * Security: uses execFileSync (no shell) and validates refs against a strict
- * allowlist regex so user-supplied --base-ref cannot inject shell.
+ * allowlist so a user-supplied --base-ref cannot inject arguments or shell.
  */
+
 const REF_ALLOWED = /^[A-Za-z0-9][A-Za-z0-9._\/\-~^]{0,254}$/;
 
 function isSafeRef(ref: string): boolean {
@@ -30,131 +29,234 @@ function isSafeRef(ref: string): boolean {
     return REF_ALLOWED.test(ref);
 }
 
+export class BaselineError extends Error {
+    constructor(public readonly reason: string, message: string) {
+        super(message);
+        this.name = 'BaselineError';
+    }
+}
+
+export type BaseResolution =
+    | { ok: true; baseRef: string; mergeBase: string; usedMergeBase: boolean }
+    | { ok: false; reason: string };
+
+export interface GitDiffSnapshots {
+    baseGraph: BehavioralGraph;
+    headGraph: BehavioralGraph;
+    headReport: RepositoryIntelligenceReport;
+    /** The ref the user asked for (or the first candidate that resolved). */
+    baseRef: string;
+    /** The commit actually compared against — the merge-base when one exists. */
+    baseCommit: string;
+    /**
+     * `<sha>` when the working tree is clean, `<sha>-dirty` when it is not. The head
+     * graph is always built from the working tree, so a bare SHA would claim
+     * commit-to-commit provenance for a comparison that included uncommitted edits.
+     */
+    headRef: string;
+    dirty: boolean;
+    dirtyFileCount: number;
+    trackedFileCount: number;
+    baseStats: AnalysisStats;
+    headStats: AnalysisStats;
+}
+
 export class GitDiffDriver {
     constructor(private projectRoot: string) {}
 
-    public isGitRepo(): boolean {
-        try {
-            execFileSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: this.projectRoot, stdio: 'pipe' });
-            return true;
-        } catch {
-            return false;
-        }
+    private git(args: string[], cwd = this.projectRoot): string {
+        return execFileSync('git', args, { cwd, stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 })
+            .toString();
     }
 
-    public resolveBaseRef(explicit?: string): string | null {
-        if (explicit) {
-            if (!isSafeRef(explicit)) {
-                console.error(`[veris] rejected unsafe --base-ref: ${JSON.stringify(explicit)}`);
-                return null;
-            }
-            return this.verifyRef(explicit) ? explicit : null;
-        }
-        const candidates = ['origin/main', 'origin/master', 'main', 'master', 'HEAD~1'];
-        for (const ref of candidates) {
-            if (this.verifyRef(ref)) return ref;
-        }
-        return null;
-    }
-
-    private verifyRef(ref: string): boolean {
-        if (!isSafeRef(ref)) return false;
+    private gitQuiet(args: string[], cwd = this.projectRoot): string | null {
         try {
-            execFileSync('git', ['rev-parse', '--verify', ref], { cwd: this.projectRoot, stdio: 'pipe' });
-            return true;
-        } catch {
-            return false;
-        }
-    }
-
-    private gitRoot(): string | null {
-        try {
-            return execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: this.projectRoot })
-                .toString().trim();
+            return this.git(args, cwd);
         } catch {
             return null;
         }
     }
 
-    public snapshot(baseRef?: string): GitDiffSnapshots | null {
-        if (!this.isGitRepo()) return null;
+    public isGitRepo(): boolean {
+        return this.gitQuiet(['rev-parse', '--is-inside-work-tree']) !== null;
+    }
 
-        const resolvedBase = this.resolveBaseRef(baseRef);
-        if (!resolvedBase) return null;
+    private verifyRef(ref: string): boolean {
+        if (!isSafeRef(ref)) return false;
+        return this.gitQuiet(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]) !== null;
+    }
 
-        const headRef = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: this.projectRoot }).toString().trim();
+    /**
+     * Resolves the commit to compare against.
+     *
+     * Uses `git merge-base HEAD <ref>` — the point the branch diverged — rather than
+     * the ref's current tip. Diffing against the tip reports every commit others
+     * merged since the branch was cut as behaviour *this* branch removed.
+     */
+    public resolveBase(explicit?: string): BaseResolution {
+        if (!this.isGitRepo()) {
+            return { ok: false, reason: 'not a git repository' };
+        }
 
-        const headIntel = new RepositoryIntelligenceEngine(this.projectRoot);
+        let baseRef: string | null = null;
+        if (explicit) {
+            if (!isSafeRef(explicit)) {
+                return { ok: false, reason: `unsafe base ref ${JSON.stringify(explicit)}` };
+            }
+            if (!this.verifyRef(explicit)) {
+                return { ok: false, reason: `base ref '${explicit}' does not resolve to a commit` };
+            }
+            baseRef = explicit;
+        } else {
+            const candidates = ['origin/main', 'origin/master', 'main', 'master', 'HEAD~1'];
+            baseRef = candidates.find(ref => this.verifyRef(ref)) ?? null;
+            if (!baseRef) {
+                return {
+                    ok: false,
+                    reason: 'no base ref resolved (tried origin/main, origin/master, main, master, HEAD~1)'
+                };
+            }
+        }
+
+        const mergeBase = this.gitQuiet(['merge-base', 'HEAD', baseRef])?.trim();
+        if (mergeBase) {
+            return { ok: true, baseRef, mergeBase, usedMergeBase: true };
+        }
+        // Unrelated histories, or a shallow clone with no common ancestor. The ref
+        // itself is still a defensible baseline, but say which was used.
+        const tip = this.gitQuiet(['rev-parse', `${baseRef}^{commit}`])?.trim();
+        if (!tip) return { ok: false, reason: `could not resolve '${baseRef}' to a commit` };
+        return { ok: true, baseRef, mergeBase: tip, usedMergeBase: false };
+    }
+
+    /** Project-root-relative POSIX paths of every git-tracked source file. */
+    public trackedFiles(ref?: string): Set<string> {
+        const out = new Set<string>();
+        const raw = ref
+            ? this.gitQuiet(['ls-tree', '-r', '--name-only', '-z', ref, '--', '.'])
+            : this.gitQuiet(['ls-files', '-z', '--', '.']);
+        if (raw === null) return out;
+        for (const p of raw.split('\0')) {
+            if (p) out.add(p.replace(/\\/g, '/'));
+        }
+        return out;
+    }
+
+    private dirtyCount(): number {
+        const raw = this.gitQuiet(['status', '--porcelain', '--untracked-files=no']);
+        if (!raw) return 0;
+        return raw.split('\n').filter(l => l.trim().length > 0).length;
+    }
+
+    private gitRoot(): string | null {
+        return this.gitQuiet(['rev-parse', '--show-toplevel'])?.trim() ?? null;
+    }
+
+    /**
+     * Builds both snapshots. Throws `BaselineError` rather than returning null — a
+     * caller must not be able to proceed with no baseline by ignoring a return value.
+     */
+    public snapshot(baseRef?: string): GitDiffSnapshots {
+        const resolution = this.resolveBase(baseRef);
+        if (!resolution.ok) {
+            throw new BaselineError(resolution.reason, `Cannot establish a baseline: ${resolution.reason}.`);
+        }
+
+        const headSha = this.gitQuiet(['rev-parse', 'HEAD'])?.trim() ?? 'unknown';
+        const dirtyFileCount = this.dirtyCount();
+        const dirty = dirtyFileCount > 0;
+
+        // Head is the working tree, so identify it as such.
+        const headRef = dirty ? `${headSha}-dirty` : headSha;
+
+        const headTracked = this.trackedFiles();
+        const headIntel = new RepositoryIntelligenceEngine(this.projectRoot, undefined, { includeOnly: headTracked });
         const headReport = headIntel.analyze();
         const graphEngine = new BehavioralGraphEngine();
         const headGraph = graphEngine.buildGraphFromReport(headReport);
 
-        // Scope base analysis to the same subpath the user pointed at. Without this,
-        // running `veris .` inside a subfolder of a larger repo pulls every node from
-        // the parent tree into the diff and contaminates risk/probe output.
+        // Scope the base analysis to the same subpath the user pointed at, so running
+        // `veris .` inside a subfolder of a larger repo does not pull the whole parent
+        // tree into the diff.
         const rootAbs = this.gitRoot();
         const projAbs = path.resolve(this.projectRoot);
         const subPath = rootAbs ? path.relative(rootAbs, projAbs) : '';
 
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'veris-worktree-'));
         let baseGraph: BehavioralGraph;
+        let baseStats: AnalysisStats;
         let worktreeCreated = false;
+
         try {
-            // worktree is rooted at the git toplevel; analyze the matching subpath.
-            // On Windows, large repos with deeply nested paths can exceed MAX_PATH
-            // (260 chars) during checkout — git aborts and we bail to synthetic
-            // diff rather than crash the run.
             try {
-                execFileSync('git', ['worktree', 'add', '--detach', tmpDir, resolvedBase], {
-                    cwd: this.projectRoot,
-                    stdio: 'pipe'
-                });
+                this.git(['worktree', 'add', '--detach', tmpDir, resolution.mergeBase]);
                 worktreeCreated = true;
             } catch (err) {
-                const msg = (err as Error).message || '';
-                if (/Filename too long|MAX_PATH|unable to create file/i.test(msg)) {
-                    console.error('[veris] git worktree failed (likely Windows MAX_PATH). Falling back to synthetic diff.');
-                } else {
-                    console.error('[veris] git worktree failed:', msg.split('\n')[0]);
-                    console.error('[veris] Falling back to synthetic diff.');
-                }
-                return null;
+                const msg = ((err as Error).message || '').split('\n')[0];
+                const hint = /Filename too long|MAX_PATH|unable to create file/i.test(msg)
+                    ? ' (likely the Windows MAX_PATH limit — try a shorter checkout path)'
+                    : '';
+                throw new BaselineError('worktree-failed', `git worktree failed${hint}: ${msg}`);
             }
 
             const baseAnalysisRoot = subPath ? path.join(tmpDir, subPath) : tmpDir;
-            const baseExists = fs.existsSync(baseAnalysisRoot);
-            if (subPath && !baseExists) {
-                // Subfolder didn't exist at the base ref → there is nothing to diff
-                // against. Return an empty base graph so head is treated as entirely
-                // new. Falling back to analyzing the parent tree contaminates risk
-                // and produces a fake "-155 removed" against unrelated nodes.
+            if (subPath && !fs.existsSync(baseAnalysisRoot)) {
+                // The subfolder did not exist at the base commit, so head is entirely new.
+                // An empty base graph is a true statement about that; falling back to the
+                // parent tree would invent removals against unrelated nodes.
                 baseGraph = new BehavioralGraph();
+                baseStats = emptyStats();
             } else {
-                const baseIntel = new RepositoryIntelligenceEngine(baseAnalysisRoot);
+                const baseTracked = this.trackedFiles(resolution.mergeBase);
+                const scopedBase = subPath ? reroot(baseTracked, subPath) : baseTracked;
+                const baseIntel = new RepositoryIntelligenceEngine(baseAnalysisRoot, undefined, { includeOnly: scopedBase });
                 const baseReport = baseIntel.analyze();
-                const fromPrefix = baseAnalysisRoot.replace(/\\/g, '/');
-                const toPrefix = this.projectRoot.replace(/\\/g, '/');
-                baseReport.files.forEach(f => {
-                    f.filePath = f.filePath.replace(fromPrefix, toPrefix);
-                });
+                // No path rewriting: `filePath` is relative to the analysis root on both
+                // sides, so the same file yields the same node id in the worktree and in
+                // the project. The rewrite this replaces missed `dependencyMap`, which is
+                // what zeroed out every import edge in the base graph.
                 baseGraph = graphEngine.buildGraphFromReport(baseReport);
+                baseStats = baseReport.stats;
             }
         } finally {
             if (worktreeCreated) {
-                try {
-                    execFileSync('git', ['worktree', 'remove', '--force', tmpDir], { cwd: this.projectRoot, stdio: 'pipe' });
-                } catch {
-                    // best-effort cleanup
-                }
+                this.gitQuiet(['worktree', 'remove', '--force', tmpDir]);
             } else {
-                // git aborted mid-checkout — partial worktree may exist on disk. Prune.
                 try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
-                try {
-                    execFileSync('git', ['worktree', 'prune'], { cwd: this.projectRoot, stdio: 'pipe' });
-                } catch { /* ignore */ }
+                this.gitQuiet(['worktree', 'prune']);
             }
         }
 
-        return { baseGraph, headGraph, baseRef: resolvedBase, headRef };
+        return {
+            baseGraph,
+            headGraph,
+            headReport,
+            baseRef: resolution.baseRef,
+            baseCommit: resolution.mergeBase,
+            headRef,
+            dirty,
+            dirtyFileCount,
+            trackedFileCount: headTracked.size,
+            baseStats,
+            headStats: headReport.stats
+        };
     }
+}
+
+/** Re-express repo-root-relative tracked paths as analysis-root-relative. */
+function reroot(paths: Set<string>, subPath: string): Set<string> {
+    const prefix = subPath.replace(/\\/g, '/').replace(/\/$/, '') + '/';
+    const out = new Set<string>();
+    for (const p of paths) {
+        if (p.startsWith(prefix)) out.add(p.slice(prefix.length));
+    }
+    return out;
+}
+
+function emptyStats(): AnalysisStats {
+    return {
+        filesAnalyzed: 0, filesSkipped: 0,
+        callsResolved: 0, callsHeuristic: 0, callsAmbiguous: 0, callsExternal: 0,
+        truncated: false
+    };
 }
