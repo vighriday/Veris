@@ -1,7 +1,7 @@
 import { GraphNode } from '../models/GraphModels';
 import { WorkflowDomain } from '../models/WorkflowModels';
 import { RiskReport } from '../models/RiskModels';
-import { loadProbes, ProbeTemplate } from '../data/DataLoader';
+import { loadProbes, loadRiskConfig, ProbeTemplate } from '../data/DataLoader';
 
 /**
  * Concrete Tier 3 probe generator. Probe library lives in data/probes.json
@@ -31,11 +31,14 @@ export class AdversarialProbeGenerator {
         graphNodes: GraphNode[],
         opts: { maxPerWorkflow?: number; minRiskThreshold?: number } = {}
     ): AdversarialProbe[] {
-        const maxPerWorkflow = opts.maxPerWorkflow ?? 3;
-        // Workflow gets its probe deck if any member node has risk above this floor.
-        // Floor is intentionally low — probes are directives ("here is what could
-        // break"), not findings. The point is coverage, not noise control.
-        const floor = opts.minRiskThreshold ?? 10;
+        const cfg = loadRiskConfig(this.projectRoot).planning;
+        const maxPerWorkflow = opts.maxPerWorkflow ?? cfg.probeMaxPerWorkflow;
+        // A member must reach this risk to be worth a probe. The previous default
+        // of 10 sat below the risk formula's own floor, so the filter below could
+        // never exclude anything — a dead option presented as a control. The
+        // configured value is checked against the achievable range in
+        // data/risk-config.json (`planning._note`).
+        const floor = opts.minRiskThreshold ?? cfg.probeMinOverallRisk;
         const probesData = loadProbes(this.projectRoot);
 
         const nodesById = new Map(graphNodes.map(n => [n.id, n]));
@@ -45,27 +48,31 @@ export class AdversarialProbeGenerator {
         const seen = new Set<string>();
 
         for (const wf of workflows) {
-            // Highest-risk member of the workflow becomes the anchor node for the probe.
-            // If no member is in scope, skip — workflow is unaffected by this run.
-            let anchor: { nodeId: string; risk: number } | null = null;
-            for (const id of wf.memberNodeIds) {
-                const r = riskById.get(id);
-                if (!r) continue;
-                if (!anchor || r.score.overallRisk > anchor.risk) {
-                    anchor = { nodeId: id, risk: r.score.overallRisk };
-                }
-            }
-            if (!anchor || anchor.risk < floor) continue;
-            if (!nodesById.has(anchor.nodeId)) continue;
+            // Spread the deck across the riskiest in-scope members instead of pinning
+            // every probe to a single anchor: a 200-function payments workflow used to
+            // get three probes all pointing at the same function, which reads as
+            // "verify this one node" rather than "verify this workflow".
+            // A workflow with no member above the floor is unaffected by this run.
+            const anchors = wf.memberNodeIds
+                .map(id => riskById.get(id))
+                .filter((r): r is RiskReport =>
+                    !!r && r.score.overallRisk >= floor && nodesById.has(r.nodeId))
+                .sort((a, b) => b.score.overallRisk - a.score.overallRisk ||
+                                (a.nodeId < b.nodeId ? -1 : a.nodeId > b.nodeId ? 1 : 0))
+                .slice(0, maxPerWorkflow);
+            if (anchors.length === 0) continue;
 
             const templates: ProbeTemplate[] = probesData.probesByKind[wf.kind] || probesData.generic;
+            let emitted = 0;
             for (const p of templates.slice(0, maxPerWorkflow)) {
                 // Dedup on (workflowKind, scenario) so a workflow never duplicates a probe.
                 const key = `${wf.kind}|${p.scenario}`;
                 if (seen.has(key)) continue;
                 seen.add(key);
                 probes.push({
-                    nodeId: anchor.nodeId,
+                    // Round-robin over the anchors, highest risk first, so the first
+                    // probe still lands on the riskiest member when anchors are scarce.
+                    nodeId: anchors[emitted % anchors.length].nodeId,
                     workflowId: wf.id,
                     workflowKind: wf.kind,
                     category: p.category,
@@ -73,6 +80,7 @@ export class AdversarialProbeGenerator {
                     expectedInvariant: p.expectedInvariant,
                     severity: p.severity
                 });
+                emitted++;
             }
         }
         return probes;

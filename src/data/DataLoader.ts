@@ -66,6 +66,19 @@ export interface RiskConfig {
         tierCostSeconds: { [tier: string]: number };
         workflowCriticality: { [kind: string]: number };
     };
+    /**
+     * Thresholds deciding which verification work gets planned. Every value is an
+     * inclusive minimum — a score equal to the threshold clears it — so the tier
+     * boundaries read the same way wherever they are applied.
+     */
+    planning: {
+        tier2MinIntegrationCount: number;
+        tier2MinOverallRisk: number;
+        tier3MinBlastRadius: number;
+        tier3MinRuntimeCriticality: number;
+        probeMinOverallRisk: number;
+        probeMaxPerWorkflow: number;
+    };
 }
 
 let packageDataDir: string | null = null;

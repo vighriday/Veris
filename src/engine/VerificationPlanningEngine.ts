@@ -1,9 +1,25 @@
 import { RiskReport } from '../models/RiskModels';
 import { VerificationPlan, VerificationTarget, VerificationTier } from '../models/VerificationModels';
+import { loadRiskConfig } from '../data/DataLoader';
 
+/**
+ * Turns risk scores into tiered verification targets.
+ *
+ * Every tier boundary is loaded from the `planning` section of
+ * data/risk-config.json (override at .veris/data/risk-config.json). They used to
+ * be literals in the branch conditions here — the one engine with no config
+ * integration, while RiskModelingEngine's header claimed no threshold in the
+ * codebase was hardcoded.
+ *
+ * Thresholds are inclusive minimums, so `tier3MinBlastRadius: 51` is the old
+ * `blastRadius > 50` and stays readable next to the value it gates.
+ */
 export class VerificationPlanningEngine {
-    
+
+    constructor(private projectRoot: string = process.cwd()) {}
+
     public generatePlan(riskReports: RiskReport[]): VerificationPlan {
+        const cfg = loadRiskConfig(this.projectRoot).planning;
         const targets: VerificationTarget[] = [];
         const executionRecommendations = new Set<string>();
 
@@ -19,7 +35,7 @@ export class VerificationPlanningEngine {
             });
 
             // Tier 2: If integration count is noticeable or moderate risk
-            if (score.integrationCount > 2 || score.overallRisk > 30) {
+            if (score.integrationCount >= cfg.tier2MinIntegrationCount || score.overallRisk >= cfg.tier2MinOverallRisk) {
                 targets.push({
                     nodeId,
                     tier: VerificationTier.Behavioral,
@@ -30,7 +46,7 @@ export class VerificationPlanningEngine {
             }
 
             // Tier 3: High Blast Radius or Runtime Criticality dictates adversarial logic
-            if (score.blastRadius > 50 || score.runtimeCriticality >= 80) {
+            if (score.blastRadius >= cfg.tier3MinBlastRadius || score.runtimeCriticality >= cfg.tier3MinRuntimeCriticality) {
                 targets.push({
                     nodeId,
                     tier: VerificationTier.Adversarial,
