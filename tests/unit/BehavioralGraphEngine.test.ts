@@ -28,7 +28,7 @@ describe('BehavioralGraphEngine.buildGraphFromReport', () => {
     it('resolves an Invokes edge across files via the callable index', () => {
         // Caller.go() calls doWork(); doWork is a function in another file.
         const g = engine.buildGraphFromReport(repo([
-            file('src/a.ts', { classes: [{ name: 'Caller', methods: [fn('go', ['doWork'])] }] }),
+            file('src/a.ts', { classes: [{ name: 'Caller', methods: [fn('go', ['src/b.ts::doWork'])] }] }),
             file('src/b.ts', { functions: [fn('doWork')] }),
         ]));
         const invoke = g.getEdges().find(e => e.type === EdgeType.Invokes
