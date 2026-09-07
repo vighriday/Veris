@@ -906,3 +906,78 @@ with `--provenance`. Add Windows to the CI matrix. Make `prepublishOnly` run the
 | Date | Change |
 |---|---|
 | 2026-09-07 | Tracker created from foundation audit. 52 findings recorded, all `OPEN`. Baseline captured: 55 tests passing, typecheck clean, `a18b18f`. |
+
+---
+
+## Addendum — findings from the verification pass
+
+Three defects surfaced *after* the original 52, by the independent agents that
+verified the fixes. Two were reported as out of the verifier's file ownership; the
+third was found by a test written to close the first.
+
+### H1 · Published drift schema rejected a removed workflow · S3
+
+**Where:** [`src/schema/PublicSchema.ts`](../../src/schema/PublicSchema.ts) — `DriftReportSchema`
+
+**What happens:** `currentFingerprint` was declared a **required string**. A removed
+workflow emits `null` — it has no current shape to fingerprint — so the published
+contract rejected exactly the case B9 was fixed to report. `driftClass`, `firstRun`
+and `removedCount` were emitted and undeclared. Nothing validates against these
+schemas at runtime, so this surfaced as documentation that lied rather than a crash;
+a consumer generating types from it would have hit it immediately.
+
+**Status:** FIXED — type widened to `["string","null"]`, new fields declared,
+`driftClass` constrained to the detector's actual enum. Verified:
+`PublicSchema.test.ts` drives the real `DriftDetector` and compares its output field
+by field against the schema.
+
+---
+
+### H2 · `list_workflows` never emitted a field its schema required · S3
+
+**Where:** [`src/mcp/McpServer.ts`](../../src/mcp/McpServer.ts) `handleListWorkflows` vs
+`WorkflowAggregateSchema`
+
+**What happens:** The schema listed `kind` as required and declared `removedCount`;
+the handler emitted neither. Fixed on the handler side rather than by relaxing the
+schema — the workflow domain is genuinely useful to an agent deciding what to inspect.
+
+**Status:** FIXED — both fields emitted. Verified: `PublicSchema.test.ts` pins the
+handler's field list against the schema in both directions.
+
+---
+
+### H3 · A deleted workflow rendered with the mildest style · S3
+
+**Where:** [`assets/veris-dashboard.js`](../../assets/veris-dashboard.js) `driftItemHtml`
+
+**What happens:** The dashboard re-derived drift severity from `memberChange` instead
+of reading the `driftClass` the detector had already computed. A removal has a
+*negative* `memberChange`, so it fell through to the mild `changed` style — the most
+severe class rendered as the least. A first observation was also styled as an alert.
+
+**Status:** FIXED — keys off `driftClass`, with a dedicated `removed` treatment and a
+neutral `baseline` style for a first observation.
+
+---
+
+## Outcome
+
+| | at audit | now |
+|---|---|---|
+| Findings open | 55 | **0** |
+| Tests | 55 across 12 files | **244 across 20 files** |
+| Coverage (all `src/`) | 36.36% | **64.72%** |
+| Files at 0% coverage | 6 | 0 of the shipped engines |
+| MCP CI check | could not fail | 82 assertions incl. 10 negative cases |
+| Dashboard | 156,306,026 B | ~816 KB |
+| Markdown report | 1,264,183 B | ~6 KB |
+| Call resolution | 91.1% ambiguous | 96.9% resolved, 0 ambiguous |
+| Files analyzed (own repo) | 1,735 (1,667 third-party) | 118 tracked |
+| Tracked files | 4,548 | 117 |
+
+**What is deliberately still true**, and stated in
+[README's Honest limits](../../README.md#honest-limits): workflow classification is a
+keyword vote that never reads the call graph, and no number Veris emits is calibrated
+against observed outcomes. Both are design limits, not defects — they are the subject
+of the v2.3 and v3.0 entries in [ROADMAP.md](../../ROADMAP.md), not of this tracker.
