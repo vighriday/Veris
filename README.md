@@ -178,6 +178,11 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the deep dive.
 
 ## Honest limits
 
+> **Upgrading from 2.x?** 3.0 changes behaviour you may depend on — a missing
+> baseline is now an error rather than a fabricated diff, plugins no longer execute
+> by default, and node ids are repository-relative. See [UPGRADING.md](UPGRADING.md).
+
+
 What Veris does not do, stated plainly so nobody has to discover it the hard way.
 
 - **A workflow is a label, not a path.** Classification is a weighted keyword vote

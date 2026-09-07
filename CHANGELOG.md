@@ -2,7 +2,10 @@
 
 All notable changes to Veris (Behavioral Verification Infrastructure) will be documented in this file.
 
-## [Unreleased] — Foundation audit
+## [3.0.0] - 2026-09-08 — Foundation audit
+
+Upgrade guide: [UPGRADING.md](UPGRADING.md). All 55 findings with evidence:
+[docs/internal/BUG_TRACKER.md](docs/internal/BUG_TRACKER.md).
 
 A full architecture audit produced 52 confirmed findings, tracked in
 [`docs/internal/BUG_TRACKER.md`](docs/internal/BUG_TRACKER.md). This release addresses
