@@ -2,7 +2,7 @@
   "name": "veris-core",
   "version": "2.1.8",
   "mcpName": "io.github.vighriday/veris",
-  "description": "Veris — Behavioral Verification Infrastructure. MCP-native verification intelligence layer for autonomous coding agents.",
+  "description": "Veris \u2014 Behavioral Verification Infrastructure. MCP-native verification intelligence layer for autonomous coding agents.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
@@ -25,18 +25,18 @@
   ],
   "scripts": {
     "build": "tsc",
-    "prepublishOnly": "npm run build",
-    "start": "node dist/index.js",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build",
     "start:mcp": "node dist/mcp-index.js",
-    "dev": "ts-node src/index.ts",
+    "dev": "ts-node src/cli.ts .",
     "cli": "node dist/cli.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:mcp": "node dist/index.js && ts-node tests/test-mcp.ts",
-    "test:mcp:deep": "ts-node tests/test-mcp-deep.ts",
+    "test:mcp:deep": "npm run build && ts-node tests/test-mcp-deep.ts",
     "doctor": "node dist/cli.js doctor",
-    "schema": "node dist/cli.js schema"
+    "schema": "node dist/cli.js schema",
+    "typecheck": "tsc --noEmit",
+    "verify": "npm run typecheck && npm test && npm run build && npm run test:mcp:deep"
   },
   "keywords": [
     "mcp",
