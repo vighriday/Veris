@@ -71,18 +71,18 @@ node dist/cli.js .
 
 | Surface | What lands |
 |---|---|
-| **Behavioral graph** | Classes, methods, functions linked by `DependsOn` and real `Invokes` edges (call-expression resolution) |
-| **Semantic workflows** | Auto-clustered into 25 domains (Authentication, Billing, Checkout, Caching, Queue, Webhooks, AI, ...) |
-| **Real git diff** | Worktree-based diff vs any base ref. Not a placeholder |
-| **Risk scoring** | Blast radius, fragility, runtime criticality + plain-English explanations |
-| **Confidence math** | Half-life decay over real execution history. Failed runs reduce confidence; flaky = half credit |
-| **Drift detection** | SHA-256 workflow fingerprints. Silent rewrites caught (same members, different topology) |
+| **Behavioral graph** | Classes, methods, constructors, accessors and functions linked by `DependsOn` (containment, imports) and `Invokes` edges. Call targets are resolved through the TypeScript checker; a call whose target is ambiguous produces **no edge** rather than one per same-named declaration. Every edge declares how it was established |
+| **Semantic workflows** | Grouped into 25 domains (Authentication, Billing, Checkout, Caching, Queue, Webhooks, AI, ...) by a weighted keyword vote over paths, imports and symbol names. This is labelling, not call-graph traversal — see [honest limits](#honest-limits) |
+| **Real git diff** | Worktree diff against the **merge-base** with your base ref, restricted to git-tracked files. If no baseline resolves, the run fails with a reason — Veris never fabricates one |
+| **Risk scoring** | Coupling magnitude, inbound-coupling dominance and runtime criticality, each measuring something the others do not, with plain-English explanations. Weights live in `data/risk-config.json` |
+| **Verification coverage** | How much planned work has evidence, weighted by tier, decayed by age, and weighted by how the evidence was obtained. Not a probability that your code is correct |
+| **Drift detection** | Workflow fingerprints over repository-relative member ids, internal topology **and normalized body hashes** — so a rewritten body with unchanged names is caught, and a directory rename is not reported as drift |
 | **Counterfactual mode** | `what_if_revert(nodeIds)` simulates rollback impact |
 | **Adversarial probes** | Concrete Tier 3 hypotheses per workflow kind (idempotency, replay, retry storms, cache stampede) |
 | **Budget allocator** | Knapsack on `(tier × criticality × risk) / cost`. Highest-leverage subset within N minutes |
 | **Knowledge transfer** | Workflow-first onboarding markdown package |
 | **Cross-repo view** | Register multiple services; one MCP call for fleet-wide confidence |
-| **Interactive dashboard** | Single-file HTML. Vis-network graph. Click workflow → filter everything. ESC to clear. Click-to-copy directives |
+| **Interactive dashboard** | Standalone HTML. Graph view, click workflow → filter everything, ESC to clear, click-to-copy directives |
 
 ---
 
@@ -109,14 +109,22 @@ Confidence math now reflects what actually ran.
 
 ## Privacy
 
-- **Local-first.** Everything runs on your machine.
-- **No telemetry.** Veris does not phone home.
+- **Local-first.** All analysis runs on your machine.
+- **No telemetry.** Veris does not phone home. Nothing about your code leaves the machine.
 - **Zero-retention mode.** `VERIS_STATE_DISABLED=1` skips all `.veris/state.db` writes.
-- **No network calls.** The MCP server speaks only over stdio.
+- **No network sockets in the analyzer.** The MCP server and CLI speak stdio and the
+  filesystem only. The generated dashboard is a separate artifact opened in a browser —
+  check [`src/reporting/ReportingEngine.ts`](src/reporting/ReportingEngine.ts) for any
+  asset it references.
 
 ---
 
 ## Plugins
+
+> **Plugins execute code from the repository being analyzed, so they are OFF by
+> default.** Pass `--allow-plugins` (or set `VERIS_ENABLE_PLUGINS=1`) to enable them,
+> and only for repositories you trust. Veris prints each plugin's path and SHA-256
+> before executing it. There is no sandbox. See [SECURITY.md](SECURITY.md).
 
 Drop a `.js` file into `.veris/plugins/`:
 
@@ -148,21 +156,64 @@ See [docs/MCP_TOOLS.md](docs/MCP_TOOLS.md) for the full reference with recommend
 ## Architecture
 
 ```text
-Source -> AST (ts-morph)
-       -> Behavioral Graph (DependsOn + Invokes)
-       -> Real git-worktree diff vs base ref
-       -> Risk model (blast / fragility / criticality + explanations)
-       -> Workflow classifier (25 semantic kinds, plugin-extensible)
-       -> Fingerprints -> Drift detector (vs SQLite history)
-       -> Adversarial probe generator
-       -> Verification plan (Tier 1/2/3)
-       -> Budget allocator (leverage / cost)
-       -> Confidence engine (half-life decay over execution history)
-       -> Reports + interactive dashboard
-       -> MCP (17 tools) -> autonomous agents close the loop via report_execution
+git-tracked source
+   -> AST + checker-resolved call targets (ts-morph)
+   -> Behavioral graph (repository-relative ids, body hashes, typed edge resolution)
+   -> Worktree snapshot at merge-base   [fails loudly if no baseline exists]
+   -> Diff (added / removed / MODIFIED-body / edges)
+   -> Risk model (coupling magnitude + inbound dominance + criticality)
+   -> Workflow classifier (25 keyword-voted domains, plugin-extensible)
+   -> Fingerprints -> drift detector (vs SQLite history)
+   -> Adversarial probes + tiered verification plan + budget allocation
+   -> Coverage engine (tier-weighted, time-decayed, trust-weighted evidence)
+   -> Reports + dashboard
+   -> MCP (17 validated, size-capped tools)
+        -> agents close the loop via report_execution
+        -> evidence is append-only, hash-chained and trust-typed
 ```
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the deep dive.
+
+---
+
+## Honest limits
+
+What Veris does not do, stated plainly so nobody has to discover it the hard way.
+
+- **A workflow is a label, not a path.** Classification is a weighted keyword vote
+  over directory names, import specifiers and symbol names. It does not traverse the
+  call graph, so a "workflow" is a set of declarations sharing a label — it has no
+  entry point and no ordering. Expect misfiles: rate-limiting code that imports Redis
+  lands in Caching; a file under `models/` lands in Persistence.
+
+- **Coverage is not assurance.** `identify_unverified_behaviors` reports how much
+  planned verification has evidence behind it, decayed by age and weighted by how the
+  evidence was obtained. It has never been calibrated against real incidents, so it
+  does not estimate the probability that your code is correct, and it should not be
+  cited as though it does. `overallConfidence` is an alias of that coverage figure,
+  kept for API compatibility.
+
+- **Risk is a heuristic.** Coupling magnitude, inbound-coupling dominance and a
+  name-and-path criticality regex. It is useful for ranking what to look at first. It
+  is not a defect predictor and has no ground truth behind it.
+
+- **Probes are a curated library, not generated tests.** The adversarial scenarios
+  are real failure modes written by hand and selected by workflow kind. They are not
+  derived from your code, so they name the failure mode rather than your call site.
+
+- **TypeScript and JavaScript only.** Python and Go adapters are on the roadmap.
+  Multi-language repositories are analyzed for their TS/JS portion only.
+
+- **Some calls cannot be resolved.** Dynamic dispatch, `any`-typed values and untyped
+  JavaScript defeat the checker. Those calls produce no edge, and the counts appear in
+  `analyze_repository` output. Missing edges understate coupling; they never invent it.
+
+- **A baseline is required.** Veris compares against the merge-base with a real git
+  ref. Outside a git repository, or in a shallow clone with no common ancestor, it
+  fails with an explanation instead of producing a diff against something imaginary.
+
+Findings from the internal architecture audit, including what has been fixed and what
+remains, are tracked in [`docs/internal/BUG_TRACKER.md`](docs/internal/BUG_TRACKER.md).
 
 ---
 
