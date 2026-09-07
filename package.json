@@ -1,6 +1,6 @@
 {
   "name": "veris-core",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "mcpName": "io.github.vighriday/veris",
   "description": "Veris — Behavioral Verification Infrastructure. MCP-native verification intelligence layer for autonomous coding agents.",
   "main": "dist/index.js",

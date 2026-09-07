@@ -33,8 +33,123 @@ function loadDatabaseCtor(): DatabaseCtor | null {
 }
 
 /** True when persistence is available in this environment. */
+let cachedUsable: boolean | undefined;
+
+/**
+ * Whether the native binding actually works, established by using it.
+ *
+ * require() is not sufficient and never was. better-sqlite3 resolves its addon
+ * lazily on first construction, so the module imports cleanly on a machine where
+ * no .node file was ever produced and only fails later, at the first real call.
+ * Checking the import therefore reported persistence as available in exactly the
+ * case it is not — which is now the common case, since npm 12 stopped running the
+ * install script that fetches the binding.
+ */
+function bindingUsable(): boolean {
+    if (cachedUsable !== undefined) return cachedUsable;
+    const Ctor = loadDatabaseCtor();
+    if (!Ctor) return (cachedUsable = false);
+    try {
+        const probe = new Ctor(':memory:');
+        probe.close();
+        cachedUsable = true;
+    } catch {
+        cachedUsable = false;
+    }
+    return cachedUsable;
+}
+
+/** True when persistence is available in this environment. */
 export function isStateAvailable(): boolean {
-    return loadDatabaseCtor() !== null;
+    return bindingUsable();
+}
+
+/**
+ * Why persistence is unavailable, which determines what the user should do.
+ *
+ * `absent` and `unbuilt` look identical from `require()` alone but have opposite
+ * remedies, and telling a user to install a package that is already installed sends
+ * them the wrong way:
+ *
+ * - `absent`   — npm skipped the optional dependency, usually no prebuilt binary for
+ *                this platform and no C++ toolchain to build one. Install it.
+ * - `unbuilt`  — the package is on disk but its native binding was never produced.
+ *                Since npm 12 this is the common case: npm no longer runs dependency
+ *                install scripts by default, so better-sqlite3's prebuild-install
+ *                step never runs and no .node file is ever fetched. Reinstalling
+ *                changes nothing; the scripts have to be allowed first.
+ *
+ * The npm 12 allowlist is per-project and is NOT inherited from a dependency, so
+ * nothing Veris declares in its own package.json helps someone installing Veris.
+ * They have to allow it in theirs, which is why this has to be reported rather than
+ * fixed upstream.
+ */
+export type SqliteDiagnosis =
+    | { state: 'available' }
+    | { state: 'absent' }
+    | { state: 'unbuilt'; detail: string };
+
+/**
+ * Probes the environment. Injectable so the classification above can be tested
+ * for all three states: the real module either loads or does not on any given
+ * machine, so the two failure branches are otherwise unreachable in a test.
+ */
+export interface SqliteProbe {
+    /** The module loads and yields a usable constructor. */
+    loads(): boolean;
+    /** The package is present on disk, whether or not its binding was built. */
+    installed(): boolean;
+    /** First line of the failure from attempting to load it. */
+    failure(): string;
+}
+
+const defaultProbe: SqliteProbe = {
+    loads: () => bindingUsable(),
+    installed: () => {
+        // Resolve the manifest, not the entry point. The entry point is exactly what
+        // fails when the binding is missing, so it could not tell the cases apart.
+        try {
+            require.resolve('better-sqlite3/package.json');
+            return true;
+        } catch {
+            return false;
+        }
+    },
+    failure: () => {
+        // Construct, do not merely require: requiring succeeds with no binding, so
+        // it yields no error to report and the cause would stay invisible.
+        try {
+            const Ctor = loadDatabaseCtor();
+            if (!Ctor) return 'module could not be loaded';
+            const probe = new Ctor(':memory:');
+            probe.close();
+            return 'loaded';
+        } catch (e) {
+            return ((e as Error).message || 'native binding not found').split('\n')[0];
+        }
+    }
+};
+
+export function diagnoseSqlite(probe: SqliteProbe = defaultProbe): SqliteDiagnosis {
+    if (probe.loads()) return { state: 'available' };
+    if (!probe.installed()) return { state: 'absent' };
+    return { state: 'unbuilt', detail: probe.failure() };
+}
+
+/** One line telling the user what to actually do about it. */
+export function sqliteRemedy(d: SqliteDiagnosis): string | null {
+    switch (d.state) {
+        case 'available':
+            return null;
+        case 'absent':
+            return 'npm install better-sqlite3';
+        case 'unbuilt':
+            // npm >= 12 blocks dependency install scripts unless allowlisted, so the
+            // rebuild has to be preceded by approving them or it fails the same way.
+            return 'npm approve-scripts better-sqlite3 && npm rebuild better-sqlite3'
+                + '  (npm 12 blocks install scripts by default; on npm 11 or older,'
+                + ' npm rebuild better-sqlite3 alone is enough)';
+    }
 }
 
 /**

@@ -218,6 +218,24 @@ explicitly:
 npm install better-sqlite3
 ```
 
+On **npm 12 or later** that is not enough on its own. npm 12 stopped running
+dependency install scripts by default, and better-sqlite3 fetches its prebuilt
+binding from one — so the package installs, the binding never arrives, and it fails
+at first use rather than at install. Allow it explicitly in **your own**
+`package.json` (the allowlist is per-project and is not inherited from a dependency,
+so nothing Veris declares can do this for you):
+
+```json
+{ "allowScripts": { "better-sqlite3": true } }
+```
+
+```bash
+npm rebuild better-sqlite3
+```
+
+`veris doctor` distinguishes the two cases — not installed, versus installed with no
+binding — because they have opposite remedies.
+
 ---
 
 ## Behaviour that is simply better

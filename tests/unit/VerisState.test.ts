@@ -1,7 +1,7 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { VerisState, isStateAvailable } from '../../src/persistence/VerisState';
+import { VerisState, isStateAvailable, diagnoseSqlite, sqliteRemedy } from '../../src/persistence/VerisState';
 import { tmpDir, cleanupAll } from './tmpRepo';
 
 // better-sqlite3 is an optional native dependency: it has no prebuilt binary for
@@ -240,5 +240,77 @@ withState('VerisState — node risk history', () => {
         expect(history[0].risk).toBe(70);
         expect(history[1].risk).toBe(40);
         state.close();
+    });
+});
+
+/**
+ * npm 12 stopped running dependency install scripts by default, so better-sqlite3
+ * no longer fetches its prebuilt binding on install. The package lands on disk with
+ * no .node file, which is a different situation from not being installed at all and
+ * has the opposite remedy — reinstalling a package that is already installed does
+ * nothing. These assert that the two are actually distinguished, because the whole
+ * point of the diagnosis is to stop sending people the wrong way.
+ */
+describe('sqlite diagnosis', () => {
+    const probe = (loads: boolean, installed: boolean, failure = 'Could not locate the bindings file') => ({
+        loads: () => loads,
+        installed: () => installed,
+        failure: () => failure
+    });
+
+    it('reports available when the module loads', () => {
+        const d = diagnoseSqlite(probe(true, true));
+        expect(d.state).toBe('available');
+        expect(sqliteRemedy(d)).toBeNull();
+    });
+
+    it('reports absent when the package is not on disk', () => {
+        const d = diagnoseSqlite(probe(false, false));
+        expect(d.state).toBe('absent');
+        expect(sqliteRemedy(d)).toContain('npm install better-sqlite3');
+    });
+
+    it('reports unbuilt when the package is on disk but will not load', () => {
+        const d = diagnoseSqlite(probe(false, true));
+        expect(d.state).toBe('unbuilt');
+    });
+
+    it('does not tell someone who already installed it to install it', () => {
+        // The regression this guards: both failures previously collapsed to
+        // "not installed", so the npm 12 case got advice that cannot work.
+        const remedy = sqliteRemedy(diagnoseSqlite(probe(false, true)))!;
+        expect(remedy).toContain('approve-scripts');
+        expect(remedy).not.toMatch(/npm install better-sqlite3/);
+    });
+
+    it('carries the underlying load failure so the cause is visible', () => {
+        const d = diagnoseSqlite(probe(false, true, 'Could not locate the bindings file'));
+        expect(d.state === 'unbuilt' && d.detail).toContain('bindings file');
+    });
+
+    it('agrees with the real environment', () => {
+        // Guards the default probe itself: the injected cases above would all still
+        // pass if defaultProbe were wired up wrong. Which of the two failure states
+        // holds depends on the machine, so only the availability split is asserted.
+        const state = diagnoseSqlite().state;
+        expect(state === 'available').toBe(isStateAvailable());
+        expect(['available', 'absent', 'unbuilt']).toContain(state);
+    });
+});
+
+describe('availability is measured, not assumed', () => {
+    it('isStateAvailable agrees with whether a VerisState actually activates', () => {
+        // The bug this locks: availability was decided by require() alone. better-sqlite3
+        // resolves its native addon lazily on first construction, so on a machine where
+        // the binding was never built the module imports cleanly and only fails later.
+        // isStateAvailable() therefore returned true while every write silently no-opped,
+        // and `describe.skip` above would have run the persistence suite against a
+        // database that could not open. The claim and the reality have to match.
+        const { state } = newState();
+        try {
+            expect(state.active).toBe(isStateAvailable());
+        } finally {
+            state.close();
+        }
     });
 });

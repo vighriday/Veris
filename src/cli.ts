@@ -176,14 +176,23 @@ function runDoctor(targetDir: string) {
     });
     // Optional: a missing native binding means no history, not a broken install, so
     // it must not read as a failed check.
-    const sqlite = !!safeRequire('better-sqlite3');
-    out.push({
-        check: 'better-sqlite3 (optional)',
-        ok: true,
-        detail: sqlite
-            ? 'available — run history and drift enabled'
-            : 'not installed — analysis works, history and drift disabled'
-    });
+    //
+    // Reported in three states rather than two. "installed but never built" is now
+    // the common failure -- npm 12 does not run dependency install scripts by
+    // default, so better-sqlite3 never fetches its prebuilt binding -- and it needs
+    // a different fix from "not installed". Telling someone who installed it that
+    // it is not installed sends them to reinstall, which changes nothing.
+    const { diagnoseSqlite, sqliteRemedy } = require('./persistence/VerisState');
+    const sqlite = diagnoseSqlite();
+    const remedy = sqliteRemedy(sqlite);
+    const sqliteDetail =
+        sqlite.state === 'available'
+            ? 'available - run history and drift enabled'
+            : sqlite.state === 'absent'
+                ? `not installed - analysis works, history and drift disabled. Fix: ${remedy}`
+                : `installed but its native binding was never built (${sqlite.detail}). `
+                  + `History and drift disabled. Fix: ${remedy}`;
+    out.push({ check: 'better-sqlite3 (optional)', ok: true, detail: sqliteDetail });
     out.push({ check: 'ts-morph', ok: !!safeRequire('ts-morph'), detail: safeRequire('ts-morph') ? 'available' : 'missing (npm install)' });
 
     console.log(`Veris doctor — ${out.filter(x => x.ok).length}/${out.length} checks passed`);
@@ -469,7 +478,11 @@ async function analyzeOnce(args: CliArgs) {
         console.error("Message:", err.message);
         if (err.message && err.message.includes('better-sqlite3')) {
             console.error("\nHint: native module 'better-sqlite3' failed to load. Try:");
-            console.error("  npm rebuild better-sqlite3");
+            // Required here rather than at the top of the file: this module is loaded
+            // on every CLI invocation, and better-sqlite3 must stay lazily resolved.
+            const diag = require('./persistence/VerisState');
+            const d = diag.sqliteRemedy(diag.diagnoseSqlite());
+            if (d) console.error(`  ${d}`);
             console.error("  Or run with VERIS_STATE_DISABLED=1 to skip persistence.");
         } else if (err.message && err.message.toLowerCase().includes('git')) {
             console.error("\nHint: a git operation failed. Check `git status` works in this directory,");

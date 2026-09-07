@@ -130,6 +130,19 @@ npx veris-core doctor                       # check git, base ref, deps
 > with your base ref. If it cannot establish one, it **fails and says why** rather
 > than inventing a baseline. In CI: `fetch-depth: 0`.
 
+> **On npm 12, run history needs one extra line.** npm 12 no longer runs dependency
+> install scripts by default, so `better-sqlite3` never fetches its prebuilt binding.
+> Veris still analyzes, diffs, scores risk and plans verification — only run history
+> and cross-run drift need it. The allowlist is per-project and is *not* inherited
+> from a dependency, so it has to go in **your** `package.json`:
+>
+> ```json
+> { "allowScripts": { "better-sqlite3": true } }
+> ```
+>
+> Then `npm rebuild better-sqlite3`. `veris-core doctor` reports which mode you are in,
+> and never claims persistence is working when it is not.
+
 ---
 
 ## How it thinks

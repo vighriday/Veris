@@ -2,6 +2,34 @@
 
 All notable changes to Veris (Behavioral Verification Infrastructure) will be documented in this file.
 
+## [3.0.1] - 2026-09-08 — Persistence availability is measured, not assumed
+
+### Fixed
+
+- **`isStateAvailable()` reported persistence as working when it was not.**
+  Availability was decided by whether `require('better-sqlite3')` succeeded.
+  better-sqlite3 resolves its native addon lazily on first construction, not at
+  import, so on a machine where the binding was never built the module imports
+  cleanly and only fails later. Veris therefore announced that run history was
+  enabled while every write silently no-opped. Availability is now established by
+  opening an in-memory database and closing it.
+- **`veris doctor` distinguishes "not installed" from "installed but never built".**
+  The two have opposite remedies, and collapsing them told anyone hitting the second
+  case to install a package they already had.
+
+### Why this surfaced now
+
+npm 12 stopped running dependency install scripts by default, so better-sqlite3 no
+longer fetches its prebuilt binding on install. "Installed, but with no binding"
+went from rare to the default outcome, which is the exact case the old check got
+wrong. The npm 12 allowlist is per-project and is not inherited from a dependency,
+so this cannot be fixed on Veris' side for consumers — see the note in
+[README](README.md#install) and [UPGRADING.md](UPGRADING.md).
+
+No API changes. Analysis, diffing, risk, workflows and probes were unaffected
+throughout: they do not use persistence, and the degradation path itself worked.
+What was wrong was Veris' report of its own state.
+
 ## [3.0.0] - 2026-09-08 — Foundation audit
 
 Upgrade guide: [UPGRADING.md](UPGRADING.md). All 55 findings with evidence:
