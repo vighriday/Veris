@@ -440,9 +440,13 @@ export class VerisMcpServer {
 
     private handleListWorkflows() {
         const wf = this.ensureWorkflows();
+        // `kind` and `removedCount` are declared by WorkflowAggregateSchema — `kind`
+        // as required — and were never emitted, so the published schema described a
+        // response shape this handler did not produce.
         const summary = wf.aggregates.slice(0, CAPS.workflows).map(a => ({
-            workflowId: a.workflowId, workflowName: a.workflowName,
-            memberCount: a.memberCount, impactedCount: a.impactedCount, addedCount: a.addedCount,
+            workflowId: a.workflowId, workflowName: a.workflowName, kind: a.kind,
+            memberCount: a.memberCount, impactedCount: a.impactedCount,
+            addedCount: a.addedCount, removedCount: a.removedCount,
             averageRisk: a.averageRisk, maxRisk: a.maxRisk,
             narrative: a.narrative, runtimeRisks: a.runtimeRisks
         }));

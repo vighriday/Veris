@@ -463,6 +463,11 @@ export function renderDashboard(payload: DashboardPayload, options: RenderDashbo
   .drift-item.changed { border-left-color: var(--warn); }
   .drift-item.silent { border-left-color: var(--danger); }
   .drift-item.oscillating { border-left-color: var(--danger); background: rgba(255,93,108,0.05); }
+  /* A workflow that disappeared is the most severe class: a rewritten workflow can
+     still be verified, a deleted one cannot. Styled strongest, not mildest. */
+  .drift-item.removed { border-left-color: var(--danger); background: rgba(255,93,108,0.10); font-weight: 600; }
+  /* A first observation is not drift and must not be styled as an alert. */
+  .drift-item.baseline { border-left-color: var(--muted); opacity: 0.85; }
   .probe-item { background:var(--panel2); border-radius: 6px; padding: 10px 12px; margin-bottom: 6px; border-left: 3px solid var(--accent); }
   .probe-item.severity-high { border-left-color: var(--danger); }
   .probe-item.severity-medium { border-left-color: var(--warn); }

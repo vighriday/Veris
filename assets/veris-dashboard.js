@@ -208,10 +208,25 @@
         '</div>';
     }
 
+    // Key off driftClass, which the detector already computed, rather than
+    // re-deriving severity from memberChange. A removed workflow has a negative
+    // memberChange, so the old derivation styled the most severe class — a workflow
+    // that vanished — with the mildest "changed" treatment.
+    const DRIFT_CLASS_STYLE = {
+        'removed': 'removed',
+        'silent-rewrite': 'silent',
+        'surface-contraction': 'changed',
+        'surface-expansion': 'changed',
+        'first-observation': 'baseline',
+        'stable': ''
+    };
+
     function driftItemHtml(d) {
-        const cls = d.oscillationDetected ? 'oscillating'
-            : (d.changedSinceLastRun && d.memberChange === 0) ? 'silent'
-                : d.changedSinceLastRun ? 'changed' : '';
+        const cls = d.oscillationDetected
+            ? 'oscillating'
+            : (DRIFT_CLASS_STYLE[d.driftClass] !== undefined
+                ? DRIFT_CLASS_STYLE[d.driftClass]
+                : (d.changedSinceLastRun ? 'changed' : ''));
         return h`<div class="drift-item ${cls}">${d.narrative}</div>`;
     }
 

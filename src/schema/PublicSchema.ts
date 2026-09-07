@@ -72,22 +72,38 @@ export const AdversarialProbeSchema = {
 export const DriftReportSchema = {
     $id: "veris://drift-report",
     type: "object",
-    required: ["runId", "workflows", "summary"],
+    required: ["runId", "firstRun", "removedCount", "workflows", "summary"],
     properties: {
         runId: { type: "string" },
         summary: { type: "string" },
+        /**
+         * True when no prior fingerprint exists at all. A baseline run and a run with
+         * nothing to report are different statements, and a consumer must not read
+         * the first as an all-clear.
+         */
+        firstRun: { type: "boolean" },
+        removedCount: { type: "integer", minimum: 0 },
         workflows: {
             type: "array",
             items: {
                 type: "object",
-                required: ["workflowId", "currentFingerprint", "changedSinceLastRun", "narrative"],
+                required: ["workflowId", "currentFingerprint", "changedSinceLastRun", "driftClass", "narrative"],
                 properties: {
                     workflowId: { type: "string" },
                     workflowName: { type: "string" },
-                    currentFingerprint: { type: "string" },
+                    /**
+                     * Null for a removed workflow: it has no current shape to
+                     * fingerprint. Declaring this as a plain string made the schema
+                     * reject exactly the case the drift detector exists to report.
+                     */
+                    currentFingerprint: { type: ["string", "null"] },
                     previousFingerprint: { type: ["string", "null"] },
                     changedSinceLastRun: { type: "boolean" },
-                    distinctFingerprintsObserved: { type: "integer", minimum: 1 },
+                    driftClass: {
+                        type: "string",
+                        enum: ["removed", "silent-rewrite", "surface-contraction", "surface-expansion", "first-observation", "stable"]
+                    },
+                    distinctFingerprintsObserved: { type: "integer", minimum: 0 },
                     memberCountTrend: { type: "array", items: { type: "integer" } },
                     oscillationDetected: { type: "boolean" },
                     memberChange: { type: "integer" },
