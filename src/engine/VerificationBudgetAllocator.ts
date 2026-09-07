@@ -9,6 +9,20 @@ import { loadRiskConfig } from '../data/DataLoader';
  * Leverage score per target =
  *   (tierLeverage × workflowCriticality × (risk/10)) / tierCostSeconds
  *
+ * `tierLeverage` is calibrated proportional to `tierCostSeconds` in
+ * data/risk-config.json, which makes leverage-per-second identical across tiers.
+ * That calibration is the whole point: at the previous 1/3/7 leverage against
+ * 5/30/120 seconds the densities were 1 : 0.5 : 0.29, an unstated per-tier
+ * penalty. Greedy therefore drained every cheap structural check before it ever
+ * reached an adversarial target — the tier that finds the failures this product
+ * exists to surface. With the tier term neutral, ranking is driven by risk and
+ * workflow criticality, which is what a reader of the narrative expects.
+ *
+ * Ties (same node, or two equally-risky nodes) are broken deterministically by
+ * node id then by cost, so equal-value work is allocated depth-first per node —
+ * full T1+T2+T3 coverage of the riskiest nodes rather than a thin T1 layer over
+ * everything — and the tier mix at a given budget is reproducible.
+ *
  * All weights live in data/risk-config.json (override-able at
  * .veris/data/risk-config.json). Greedy is near-optimal for budget shapes
  * in the human-minutes range.
@@ -51,7 +65,13 @@ export class VerificationBudgetAllocator {
             return { ...t, score: parseFloat(score.toFixed(4)), estimatedSec: cost, workflowName: wf?.name };
         });
 
-        scored.sort((a, b) => b.score - a.score);
+        // Rounding to 4dp above makes tier-neutral densities compare exactly equal,
+        // so the tie-break below decides the mix rather than float noise.
+        scored.sort((a, b) => {
+            if (b.score !== a.score) return b.score - a.score;
+            if (a.nodeId !== b.nodeId) return a.nodeId < b.nodeId ? -1 : 1;
+            return a.estimatedSec - b.estimatedSec;
+        });
 
         const selected: Scored[] = [];
         const skipped: Array<VerificationTarget & { reason: string }> = [];
@@ -74,7 +94,8 @@ export class VerificationBudgetAllocator {
         const narrative = `Budget ${budgetMinutes} min — allocated ${selected.length}/${plan.targets.length} targets ` +
             `(T1=${coverage.tier1}, T2=${coverage.tier2}, T3=${coverage.tier3}). ` +
             `Estimated runtime ${Math.round(used / 60)} min of ${budgetMinutes}. ` +
-            `Sorted by leverage = (tier × workflow criticality × risk) / estimated cost.`;
+            `Sorted by leverage = (tier × workflow criticality × risk) / estimated cost, with tier leverage ` +
+            `calibrated proportional to tier cost so deeper tiers are not structurally outranked by cheaper ones.`;
 
         return { selected, skipped, totalEstimatedSec: used, budgetSec, coverage, narrative };
     }

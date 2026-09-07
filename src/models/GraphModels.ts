@@ -13,6 +13,8 @@ export interface GraphNode {
     id: string;
     type: NodeType;
     label: string;
+    /** Normalized hash of the declaration body. Absent for synthesized nodes. */
+    bodyHash?: string;
     metadata?: any;
 }
 
@@ -26,10 +28,19 @@ export enum EdgeType {
     DependsOn = 'DEPENDS_ON'
 }
 
+/**
+ * How the edge was established. `resolved` came from the TypeScript checker;
+ * `heuristic` from an unambiguous single-candidate name match; `structural` from
+ * containment or an import relationship. Consumers that must not reason on guesses
+ * (policy rules, gates) should filter to `resolved`.
+ */
+export type EdgeResolution = 'resolved' | 'heuristic' | 'structural';
+
 export interface GraphEdge {
     sourceId: string;
     targetId: string;
     type: EdgeType;
+    resolution?: EdgeResolution;
 }
 
 export class BehavioralGraph {

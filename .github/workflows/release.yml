@@ -1,0 +1,79 @@
+name: Release
+
+# Publishing was previously manual from a maintainer laptop, with no attestation of
+# what source produced the tarball. This workflow publishes from a tagged commit with
+# npm provenance, so a consumer can verify the published artifact came from this
+# repository at this commit.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run every check and pack the tarball without publishing'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write   # required for npm provenance
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - name: Install
+        run: npm ci
+
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$tag" != "$pkg" ]; then
+            echo "tag v$tag does not match package.json version $pkg"
+            exit 1
+          fi
+          echo "version $pkg confirmed"
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: MCP integration check
+        run: npx ts-node tests/test-mcp-deep.ts
+        timeout-minutes: 5
+
+      - name: Pack and inspect contents
+        run: |
+          npm pack --dry-run
+          # The package must never ship the analysis state or generated reports.
+          if npm pack --dry-run 2>&1 | grep -E '\.veris/|veris-reports/|node_modules/'; then
+            echo "packaged tarball contains files that must not ship"
+            exit 1
+          fi
+
+      - name: Publish to npm with provenance
+        if: startsWith(github.ref, 'refs/tags/v') && github.event.inputs.dry_run != 'true'
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

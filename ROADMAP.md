@@ -2,61 +2,109 @@
 
 Living document. Reflects intent, not commitments. PRs welcome on any item.
 
-## Now (v2.1.x — Public Launch)
+## Where the project actually is
 
-- [x] MCP-native server with 17 tools over stdio.
-- [x] Workflow classifier with 25 default domain rules, fully data-driven via `data/workflow-rules.json`.
-- [x] Risk modeling with explainable scoring (blast radius, fragility, runtime criticality, all weights externalized in `data/risk-config.json`).
-- [x] Workflow fingerprinting + drift detection (silent rewrites, oscillation).
-- [x] Counterfactual mode (`what_if_revert`).
-- [x] Adversarial probe templates per workflow kind, externalized in `data/probes.json`.
-- [x] Verification budget allocator (greedy knapsack on leverage / cost).
-- [x] Confidence engine with half-life decay over real execution history.
-- [x] Interactive single-file HTML dashboard (graph, heatmap, drift, probes, budget, history).
-- [x] Workflow-first onboarding markdown export.
-- [x] Plugin loader (`.veris/plugins/*.js`) for custom rules and risks.
-- [x] Cross-repo registry for fleet snapshots.
-- [x] Local SQLite state with WAL, zero-retention mode.
-- [x] Public npm: `npx veris-core`.
+A full architecture audit produced 52 confirmed findings, all now addressed and
+tracked with evidence in [`docs/internal/BUG_TRACKER.md`](docs/internal/BUG_TRACKER.md).
+Several were severe: a fabricated baseline shipped through five call sites, call
+edges inferred by name matching (91% ambiguous on a real dependency), and an
+evidence store the evaluated agent could overwrite.
 
-## Next (v2.2 — Coverage and Accuracy)
+Those are fixed. The honest summary of what exists now:
 
-- [ ] Plugin marketplace index (static site at `plugins.veris.dev`).
-- [ ] Plugin manifest spec (`veris-plugin.json`) with capability declarations.
-- [ ] Workflow detection: optional ML-assisted classifier trained on labeled OSS repos (opt-in).
-- [ ] Smarter fan-in/fan-out path detection for routing workflows.
-- [ ] Configurable risk thresholds per workflow kind (e.g. Payments demands 90+).
-- [ ] CSV / SARIF export for CI pipelines.
-- [ ] PR comment integration via GitHub App.
+- **The substrate is trustworthy.** Baselines are real merge-base comparisons or the
+  run fails. Call edges come from the TypeScript checker and declare how they were
+  resolved. Node identity is portable and includes a body hash. Evidence is
+  append-only, hash-chained and attributed.
+- **The semantic layer is still shallow.** Workflow classification is a keyword vote
+  that never reads the graph. This is the largest open design question in the project.
+- **Nothing is calibrated.** Risk ranks; coverage measures evidence. Neither predicts
+  failure, and the docs now say so.
 
-## Soon (v2.3 — Language Reach)
+## Now (v2.2 — build on the fixed substrate)
 
-- [ ] Python language adapter (via tree-sitter or ast module).
-- [ ] Go language adapter.
-- [ ] Framework adapters: Express, Fastify, NestJS, Next.js routes, Django, FastAPI, Rails.
-- [ ] Multi-language monorepo support (workflows spanning TS frontend + Python backend).
+- [x] Checker-backed call resolution with typed edge provenance.
+- [x] Merge-base baselines, tracked-file scoping, no fabricated fallback.
+- [x] Repository-relative node identity + normalized body hashes.
+- [x] Append-only, hash-chained, trust-typed execution evidence.
+- [x] Validated, size-capped MCP surface with mtime cache invalidation.
+- [x] Opt-in plugin execution with disclosure.
+- [x] 235 tests over 19 files; first coverage of ingest, git, state, plugins, MCP,
+      reporting and registry.
+- [ ] Ground-truth harness: wire `examples/demo-app/GROUND_TRUTH.md` into a golden
+      test so classification accuracy is measured rather than asserted in prose.
+- [ ] Precision/recall on workflow classification against hand-labelled repositories.
+- [ ] SARIF and CSV export for CI pipelines.
+- [ ] PR comment integration via a GitHub App.
 
-## Later (v3.0 — Standard and Calibration)
+## Next (v2.3 — make the semantic layer real)
 
-- [ ] "Behavioral Diff Spec" — vendor-neutral format describing workflow boundaries, runtime risks, verification tiers.
-- [ ] Reference implementation in Python.
-- [ ] Submit to MCP working group.
-- [ ] Annual Confidence Calibration report from opt-in community telemetry.
-- [ ] Veris Verification Benchmark — 50 hand-labeled open-source repos with leaderboard.
-- [ ] Federated fingerprints: detect drift across services in one logical workflow.
+The single highest-leverage change available. Today a workflow is a bag of
+declarations sharing a keyword-voted label. It should be a path.
 
-## Known Issues / Active Fixes
+- [ ] **Entry-point discovery**: HTTP routes, CLI commands, exported handlers, queue
+      consumers, scheduled jobs. A workflow starts somewhere.
+- [ ] **Traversal from entry points** over the now-trustworthy call graph, so a
+      workflow has ordering, boundaries and an exit — not just membership.
+- [ ] **Co-change signal** from git history: files repeatedly edited together are
+      related, and it is free, language-independent evidence that needs no rules.
+- [ ] Keywords demoted to *naming* a discovered cluster rather than *finding* it.
+- [ ] Framework adapters: Express, Fastify, NestJS, Next.js routes, Django, FastAPI.
 
-See [GitHub issues](https://github.com/vighriday/Veris/issues) for the live list. Issues fixed mid-version land in the next patch release; the CHANGELOG is the canonical log.
+## Soon (v2.4 — language reach)
+
+- [ ] Python adapter (tree-sitter or `ast`), with resolution provenance equivalent to
+      the TS checker path — an adapter that guesses would reintroduce the defect the
+      audit removed.
+- [ ] Go adapter.
+- [ ] Multi-language monorepos: a workflow spanning a TS frontend and a Python backend.
+- [ ] Plugin manifest spec (`veris-plugin.json`) with capability declarations, so a
+      plugin can state what it needs rather than receiving the whole process.
+
+## Later (v3.0 — evidence as the product)
+
+The audit clarified what is defensible here. Veris' scarce asset is that it sits
+inside the agent loop while every comparable tool runs after the fact, and it now has
+an evidence store worth trusting. The direction that follows from that:
+
+- [ ] **Oracle integrity**: parse test files for what they actually assert, ingest
+      coverage attributed to changed lines rather than files, and report whether each
+      changed behaviour has a real check behind it. Published research puts ~65% of
+      agent-authored PRs at zero coverage of their own changed lines.
+- [ ] **Signed decisions**: `Decision { allow | warn | deny, ruleIds[], evidence[],
+      policyVersion }` over a typed fact base — deterministic, attributable, and
+      arguable in a way a score never is. Enforcement stays with CI or the agent
+      harness; Veris never executes.
+- [ ] **Versioned policy bundles** through the existing `DataLoader` override
+      mechanism, which is already the right shape.
+- [ ] Calibration: publish predicted-versus-observed data before any number here is
+      described as assurance.
+- [ ] Behavioral Diff Spec — a vendor-neutral format, with a reference implementation
+      outside TypeScript.
+
+## Explicitly not doing
+
+Named so nobody spends effort proposing them:
+
+- Prompt-injection or jailbreak filtering. That is what "guardrails" means in
+  practice, it is a different product, and the incumbents have a multi-year lead.
+- Runtime network mediation or action interception.
+- Generic SAST. Semgrep and CodeQL have dataflow Veris does not.
+- Owning execution: no browsers, VMs, sandboxes, CI infrastructure or test runners.
+- A paid tier, license gating, or telemetry on by default.
 
 ## Contribute
 
-Areas where outside help moves the needle most, in priority order:
+Where outside help moves the needle most, in priority order:
 
-1. **Vertical plugins** (`examples/plugin-*.js`) for fintech, healthcare, IoT, gaming, regtech.
-2. **Language adapters** for Python and Go (Phase 2.3).
-3. **Workflow rule tuning** for popular OSS repos — open a PR with classifier output snapshots and proposed rule deltas.
-4. **Probe templates** drawn from real production incidents (anonymized).
-5. **Calibration data**: report incidents Veris flagged that actually broke, and incidents Veris missed.
+1. **Entry-point detection** for a framework you know well. This is the v2.3 unlock.
+2. **Labelled repositories** for the classification benchmark — the accuracy claim
+   needs ground truth, not more rules.
+3. **Probe provenance**: the 22 shipped probes are good and uncited. A probe backed by
+   a public postmortem or CVE is worth ten that are not.
+4. **Language adapters** for Python and Go.
+5. **Calibration data**: incidents Veris flagged that actually broke, and incidents it
+   missed. Both are useful; the second more so.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor guide. See [docs/MOAT.md](docs/MOAT.md) for the strategic context behind these priorities.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Strategic context in [docs/MOAT.md](docs/MOAT.md),
+which is due a rewrite against the post-audit reality.
